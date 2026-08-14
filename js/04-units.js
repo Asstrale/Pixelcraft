@@ -84,27 +84,56 @@ function zoneHasUnexplored(zone) {
   return false;
 }
 function nearestPointInZone(u, zone) {
-  let best = null, bestD = Infinity;
+  let best = null, bestCost = Infinity;
+  let bestPath = null;
+  
   const consider = (xx, yy) => {
     if (fogEnabled && exploredTile[idx(xx, yy)]) return; 
-    const d = (xx + 0.5 - u.x) ** 2 + (yy + 0.5 - u.y) ** 2;
-    if (d < bestD) { bestD = d; best = { x: xx, y: yy }; }
+    
+    const curX = Math.floor(u.x), curY = Math.floor(u.y);
+    const path = findPath(curX, curY, xx, yy, true);
+    
+    if (path) {
+        let cost = 0;
+        for (let i = 0; i < path.length; i++) {
+            if (!isWalkable(path[i].x, path[i].y)) cost += 15; 
+            cost += 1; 
+        }
+        
+        if (cost < bestCost) {
+            bestCost = cost;
+            best = { x: xx, y: yy };
+            bestPath = path;
+        }
+    } else {
+        const d = (xx + 0.5 - u.x) ** 2 + (yy + 0.5 - u.y) ** 2;
+        if (d < bestCost && bestCost === Infinity) { 
+            best = { x: xx, y: yy };
+        }
+    }
   };
+
   if (zone.type === 'rect') {
-    for (let yy = zone.y0; yy <= zone.y1; yy++) for (let xx = zone.x0; xx <= zone.x1; xx++) consider(xx, yy);
+    for (let xx = zone.x0; xx <= zone.x1; xx++) {
+        consider(xx, zone.y0);
+        if (zone.y1 !== zone.y0) consider(xx, zone.y1);
+    }
+    for (let yy = zone.y0 + 1; yy <= zone.y1 - 1; yy++) {
+        consider(zone.x0, yy);
+        if (zone.x1 !== zone.x0) consider(zone.x1, yy);
+    }
   } else {
     for (const t of zone.tiles) consider(t.x, t.y);
   }
-  if (best) return best;
-  if (zone.type === 'rect') return { x: clamp(Math.floor(u.x), zone.x0, zone.x1), y: clamp(Math.floor(u.y), zone.y0, zone.y1) };
-  return { x: Math.floor(u.x), y: Math.floor(u.y) };
+  
+  return { point: best, path: bestPath };
 }
 
 function zoneBreachPoint(u, zone) {
   const cached = zone.breachPoint;
-  if (cached && (!fogEnabled || !exploredTile[idx(cached.x, cached.y)])) return cached;
+  if (cached && (!fogEnabled || !exploredTile[idx(cached.x, cached.y)])) return { point: cached, path: null };
   const fresh = nearestPointInZone(u, zone);
-  zone.breachPoint = fresh;
+  if (fresh.point) zone.breachPoint = fresh.point;
   return fresh;
 }
 
@@ -158,9 +187,28 @@ function updateUnit(u, dt) {
           u.order = { kind: 'harvest', x: target.x, y: target.y };
           u.tunnelPath = [];
         } else if (zoneHasUnexplored(u.zone)) {
-          const near = zoneBreachPoint(u, u.zone);
-          u.order = { kind: 'tunnel', x: near.x, y: near.y };
-          u.tunnelPath = [];
+          const breach = zoneBreachPoint(u, u.zone);
+          if (breach.point) {
+              const near = breach.point;
+              u.order = { kind: 'tunnel', x: near.x, y: near.y };
+              u.tunnelPath = [];
+              
+              if (breach.path) {
+                  u.path = breach.path;
+                  u.pathTargetX = near.x;
+                  u.pathTargetY = near.y;
+                  u.pathCooldown = 1.0;
+                  
+                  for (let i = 0; i < u.path.length; i++) {
+                      let px = u.path[i].x, py = u.path[i].y;
+                      if (!isWalkable(px, py) && isMinable(px, py)) {
+                          recordTunnelMine(u, u.order, px, py);
+                      }
+                  }
+              }
+          } else {
+              u.zone = null;
+          }
         } else {
           u.zone = null;
           if (u.carryAmount > 0) {
