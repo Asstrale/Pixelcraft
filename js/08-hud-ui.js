@@ -2,7 +2,7 @@
 // ---------- Boutons UI ----------
 document.getElementById('btn-fog').addEventListener('click', () => setFogEnabled(!fogEnabled));
 
-let uiScale = 1.8;
+let uiScale = 1.4;
 function applyUiScale() {
   document.documentElement.style.setProperty('--ui-scale', uiScale.toFixed(2));
 }
