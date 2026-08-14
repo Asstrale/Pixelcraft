@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PIXELCRAFT — Prototype</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="hud">
+  <div id="topbar" class="hud-el">
+    <span class="title">PIXELCRAFT</span>
+    <div class="res"><span class="dot bois"></span><span id="res-bois">0</span></div>
+    <div class="res"><span class="dot minerai"></span><span id="res-minerai">0</span></div>
+    <div class="res"><span class="dot pierre"></span><span id="res-pierre">0</span></div>
+    <div class="spacer"></div>
+    <button id="btn-menu" title="Menu (Échap)">☰ Menu</button>
+    <button id="btn-fog">Brouillard : ON</button>
+    <span id="fps"></span>
+  </div>
+
+  <div id="toastbar" class="hud-el"><div id="toast"></div></div>
+
+  <div id="commandcard" class="hud-el hidden">
+    <div id="cc-info"></div>
+    <div id="cc-units"></div>
+    <div id="cc-actions"></div>
+    
+    <!-- Nouveau panneau pour le slider Pinceau -->
+    <div id="brush-tools" class="hidden">
+      <label style="color:var(--amber);">Pinceau: <b id="brush-val">1</b></label>
+      <input type="range" id="brush-slider" min="1" max="4" value="1">
+    </div>
+  </div>
+
+  <div id="help" class="hud-el">
+    <span class="h-title">CONTRÔLES</span>
+    <b>Clic gauche</b> : sélectionner (glisser = multi-sélection)<br>
+    <b>Clic droit</b> : déplacer (uniquement — plus de minage automatique)<br>
+    <b>ZQSD / Flèches</b> : caméra · <b>Molette</b> : zoom<br>
+    Sélectionnez des ouvriers : onglet <b>Miner</b> (Miner vers / Zone / Pinceau) ou <b>Construire</b> (Mur / Caserne / Pilier).<br>
+    <span class="warn">⚠ Des poches de gaz sont cachées dans la roche.</span>
+  </div>
+
+  <div id="selbox"></div>
+
+  <div id="escmenu" class="hud-el hidden">
+    <div id="escmenu-box">
+      <h3>Menu</h3>
+      <label class="slider-row">
+        <span>Taille de l'interface</span>
+        <input type="range" id="slider-ui-scale" min="0.8" max="1.8" step="0.05" value="1.8">
+        <span id="slider-ui-scale-val">1.80x</span>
+      </label>
+      <label class="slider-row">
+        <span>Brouillard de guerre</span>
+        <input type="checkbox" id="chk-fog" checked>
+      </label>
+      <button id="btn-escmenu-close">Reprendre (Échap)</button>
+    </div>
+  </div>
+</div>
+
+
+<script src="js/01-constants.js"></script>
+<script src="js/02-worldgen.js"></script>
+<script src="js/03-simulation.js"></script>
+<script src="js/04-units.js"></script>
+<script src="js/05-fog-overview.js"></script>
+<script src="js/06-training-build.js"></script>
+<script src="js/07-camera-input.js"></script>
+<script src="js/08-hud-ui.js"></script>
+<script src="js/09-update.js"></script>
+<script src="js/10-render.js"></script>
+<script src="js/11-loop-init.js"></script>
+</body>
+</html>
