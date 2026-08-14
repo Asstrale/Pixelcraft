@@ -18,28 +18,28 @@ function update(dt) {
   // dessus dans les zones ouvertes) et gère le cas de deux unités parfaitement superposées
   // (ex. spawn au même endroit) en les écartant dans une direction aléatoire plutôt que de ne
   // rien faire (l'ancien calcul, basé sur dx/dist, ne pouvait pas gérer une distance nulle).
-  for (let i = 0; i < units.length; i++) {
-    for (let j = i + 1; j < units.length; j++) {
-      const u1 = units[i], u2 = units[j];
-      const dx = u1.x - u2.x;
-      const dy = u1.y - u2.y;
-      const distSq = dx * dx + dy * dy;
-      if (distSq < 0.5) {
-        let dist = Math.sqrt(distSq);
-        let ux, uy;
-        if (dist < 0.0001) {
-          const ang = Math.random() * Math.PI * 2;
-          ux = Math.cos(ang); uy = Math.sin(ang); dist = 0;
-        } else {
-          ux = dx / dist; uy = dy / dist;
-        }
-        const push = (0.7 - dist) * 0.45;
-        const px = ux * push, py = uy * push;
-        if (isWalkable(Math.floor(u1.x + px), Math.floor(u1.y + py))) { u1.x += px; u1.y += py; }
-        if (isWalkable(Math.floor(u2.x - px), Math.floor(u2.y - py))) { u2.x -= px; u2.y -= py; }
-      }
-    }
-  }
+  // for (let i = 0; i < units.length; i++) {
+  //   for (let j = i + 1; j < units.length; j++) {
+  //     const u1 = units[i], u2 = units[j];
+  //     const dx = u1.x - u2.x;
+  //     const dy = u1.y - u2.y;
+  //     const distSq = dx * dx + dy * dy;
+  //     if (distSq < 0.5) {
+  //       let dist = Math.sqrt(distSq);
+  //       let ux, uy;
+  //       if (dist < 0.0001) {
+  //         const ang = Math.random() * Math.PI * 2;
+  //         ux = Math.cos(ang); uy = Math.sin(ang); dist = 0;
+  //       } else {
+  //         ux = dx / dist; uy = dy / dist;
+  //       }
+  //       const push = (0.7 - dist) * 0.45;
+  //       const px = ux * push, py = uy * push;
+  //       if (isWalkable(Math.floor(u1.x + px), Math.floor(u1.y + py))) { u1.x += px; u1.y += py; }
+  //       if (isWalkable(Math.floor(u2.x - px), Math.floor(u2.y - py))) { u2.x -= px; u2.y -= py; }
+  //     }
+  //   }
+  // }
 
   for (const u of units) updateUnit(u, dt);
   updateBuildings(dt);
