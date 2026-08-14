@@ -7,9 +7,9 @@
 
 const TILE = 14;
 const MAP_W = 320, MAP_H = 320;
-const BASE_SIZE = 6;           
+const BASE_SIZE = 3;           
 const SPAWN_CLEAR_RADIUS = 13; 
-const NUM_PLAYERS = 2;         
+const NUM_PLAYERS = 4;         
 
 const T_EMPTY = 0, T_STONE = 1, T_WOOD = 2, T_MINERAL = 3, T_WALL = 4, T_GAS = 5;
 
@@ -25,7 +25,7 @@ const WALL_COST_PIERRE = 8;
 const BARRACKS_COST_BOIS = 40, BARRACKS_COST_MINERAI = 20;
 
 const MINE_INTERVAL = 0.0001; 
-const CARRY_CAPACITY = 3; 
+const CARRY_CAPACITY = 30; 
 const HP_PER_RESOURCE = 8; 
 
 function chebRectDist(px, py, rx, ry, rw, rh) {
@@ -35,7 +35,7 @@ function chebRectDist(px, py, rx, ry, rw, rh) {
 
 const GAS_DAMAGE = 220; 
 
-const WORKER_VISION = 7, SOLDIER_VISION = 8, BASE_VISION = 13, BARRACKS_VISION = 10;
+const WORKER_VISION = 7, SOLDIER_VISION = 8, BASE_VISION = 6, BARRACKS_VISION = 10;
 const OVERVIEW_THRESHOLD = 0.35;
 
 // Portée "infinie" pratique pour la vision en projection (tour de vision) : bornée à la
