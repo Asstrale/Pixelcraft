@@ -3,8 +3,8 @@
 // que des gris qui tranchent) : noir = jamais visité (rien dessiné, fond de la scène) / noir
 // à peine plus clair = déjà exploré mais hors du champ de vision actuel / encore un cran plus
 // clair = dans le champ de vision actuel (unité, tourelle, ou tout autre bâtiment allié).
-const EMPTY_FLOOR_EXPLORED_COLOR = '#090a08';
-const EMPTY_FLOOR_VISIBLE_COLOR = '#0f100d';
+const EMPTY_FLOOR_EXPLORED_COLOR = '#0d0d0d';
+const EMPTY_FLOOR_VISIBLE_COLOR = '#111111';
 
 function drawTile(tx, ty, time) {
   const i = idx(tx, ty);
