@@ -30,7 +30,6 @@ function onTileCleared(mx, my) {
   grid[i] = T_EMPTY; tileHP[i] = 0; tileMaxHP[i] = 0;
 }
 
-// Une case peut-elle apparaître dans un aperçu de surbrillance
 function isHighlightableUnknownSafe(x, y) {
   if (!inBounds(x, y)) return false;
   if (fogEnabled && !exploredTile[idx(x, y)]) return true;
@@ -40,13 +39,21 @@ function isHighlightableUnknownSafe(x, y) {
 // ---------- Pathfinding (A*) avec gestion des diagonales et pénalité de minage ----------
 function findPath(startX, startY, targetX, targetY, canMine = false) {
   const maxNodes = 1000; 
-  let open = [{ x: startX, y: startY, g: 0, f: dist(startX, startY, targetX, targetY), parent: null }];
+  let open = [{ x: startX, y: startY, g: 0, f: dist(startX, startY, targetX, targetY), h: dist(startX, startY, targetX, targetY), parent: null }];
   let closed = new Set();
+  
+  // NOUVEAU : Sauvegarde du point qui se rapproche géographiquement le plus de la cible
+  let closestNode = open[0]; 
   
   while (open.length > 0 && closed.size < maxNodes) {
     open.sort((a, b) => a.f - b.f);
     let curr = open.shift();
     let key = curr.x + ',' + curr.y;
+    
+    // Mise à jour du point le plus proche trouvé (basé sur la distance 'h')
+    if (curr.h < closestNode.h) {
+        closestNode = curr;
+    }
     
     if (curr.x === targetX && curr.y === targetY) {
       let path = [];
@@ -83,10 +90,20 @@ function findPath(startX, startY, targetX, targetY, canMine = false) {
       let h = dist(nx, ny, targetX, targetY);
       let existing = open.find(n => n.x === nx && n.y === ny);
       
-      if (!existing) open.push({ x: nx, y: ny, g, f: g + h, parent: curr });
+      if (!existing) open.push({ x: nx, y: ny, g, h, f: g + h, parent: curr });
       else if (g < existing.g) { existing.g = g; existing.f = g + h; existing.parent = curr; }
     }
   }
+  
+  // NOUVEAU : Si la cible est inatteignable ou trop lointaine (maxNodes),
+  // on retourne le chemin partiel jusqu'au point le plus proche trouvé.
+  if (closestNode && (closestNode.x !== startX || closestNode.y !== startY)) {
+      let path = [];
+      let node = closestNode;
+      while (node.parent) { path.push({ x: node.x, y: node.y }); node = node.parent; }
+      return path.reverse();
+  }
+  
   return null;
 }
 

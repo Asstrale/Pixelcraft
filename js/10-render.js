@@ -95,19 +95,25 @@ function drawUnit(u, time) {
   const size = base * pulse;
   const px = u.x * TILE, py = u.y * TILE;
 
+  // Sélection
   if (selectedIds.has(u.id)) {
     ctx.strokeStyle = '#e3a23c'; ctx.lineWidth = 1.5;
     const r = size * 0.7;
     ctx.strokeRect(px - r, py - r, r * 2, r * 2);
   }
+  
+  // Corps de l'unité
   ctx.fillStyle = u.type === 'soldier' ? '#e0483f' : '#f2f2ea';
   ctx.fillRect(px - size / 2, py - size / 2, size, size);
 
+  // Barre de vie
   if (u.hp < u.maxhp) {
     const hpFrac = Math.max(0, u.hp / u.maxhp);
     ctx.fillStyle = '#222'; ctx.fillRect(px - size / 2, py - size / 2 - 5, size, 3);
     ctx.fillStyle = hpFrac < 0.3 ? '#d8544a' : '#4fd1c5'; ctx.fillRect(px - size / 2, py - size / 2 - 5, size * hpFrac, 3);
   }
+  
+  // Barre de minage
   if (u.mining && u.mineTarget) {
     const i = idx(u.mineTarget.x, u.mineTarget.y);
     if (tileMaxHP[i] > 0) {
@@ -117,12 +123,32 @@ function drawUnit(u, time) {
       ctx.fillStyle = '#e3a23c'; ctx.fillRect(bx, by, TILE * (1 - frac), 3);
     }
   }
-  if (u.carryAmount > 0) {
-    const carryColor = u.carryType === 'bois' ? '#a06a35' : u.carryType === 'minerai' ? '#3f8fe0' : '#9199a1';
+
+  // Inventaire multi-couleurs
+  if (u.inventory) {
+    const resourceColors = {
+      bois: '#a06a35',    // Marron
+      minerai: '#3f8fe0', // Bleu
+      pierre: '#9199a1'   // Gris
+    };
     const pxs = 3;
-    for (let n = 0; n < CARRY_CAPACITY; n++) {
-      ctx.fillStyle = n < u.carryAmount ? carryColor : 'rgba(255,255,255,0.15)';
-      ctx.fillRect(px - size / 2 + n * (pxs + 1), py + size / 2 + 2, pxs, pxs);
+    let slotIndex = 0;
+
+    // Dessine les ressources stockées
+    for (const [resType, count] of Object.entries(u.inventory)) {
+      if (count <= 0) continue;
+      ctx.fillStyle = resourceColors[resType] || '#ffffff';
+      for (let n = 0; n < count && slotIndex < CARRY_CAPACITY; n++) {
+        ctx.fillRect(px - size / 2 + slotIndex * (pxs + 1), py + size / 2 + 2, pxs, pxs);
+        slotIndex++;
+      }
+    }
+
+    // Dessine les emplacements vides restants
+    ctx.fillStyle = 'rgba(255,255,255,0.0)';
+    while (slotIndex < CARRY_CAPACITY) {
+      ctx.fillRect(px - size / 2 + slotIndex * (pxs + 1), py + size / 2 + 2, pxs, pxs);
+      slotIndex++;
     }
   }
 }

@@ -83,6 +83,7 @@ function zoneHasUnexplored(zone) {
   }
   return false;
 }
+
 function nearestPointInZone(u, zone) {
   let best = null, bestCost = Infinity;
   let bestPath = null;
@@ -100,6 +101,13 @@ function nearestPointInZone(u, zone) {
             cost += 1; 
         }
         
+        // NOUVEAU : Si c'est un chemin partiel (n'atteignant pas xx,yy),
+        // on ajoute une forte pénalité correspondant à la distance restante estimée à creuser.
+        let lastNode = path[path.length - 1];
+        if (lastNode && (lastNode.x !== xx || lastNode.y !== yy)) {
+            cost += dist(lastNode.x, lastNode.y, xx, yy) * 16;
+        }
+        
         if (cost < bestCost) {
             bestCost = cost;
             best = { x: xx, y: yy };
@@ -107,7 +115,7 @@ function nearestPointInZone(u, zone) {
         }
     } else {
         const d = (xx + 0.5 - u.x) ** 2 + (yy + 0.5 - u.y) ** 2;
-        if (d < bestCost && bestCost === Infinity) { 
+        if (d * 16 < bestCost && bestCost === Infinity) { 
             best = { x: xx, y: yy };
         }
     }
