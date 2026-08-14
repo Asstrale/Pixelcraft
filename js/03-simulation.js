@@ -1,4 +1,4 @@
-/* === 03-simulation.js — Palette de rendu, ressources joueur, déplacement/minage, pathfinding A*, explosions de gaz, chantiers de construction (original: lignes 419-573) === */
+/* === 03-simulation.js — Palette de rendu, ressources joueur, déplacement/minage, pathfinding A*, explosions de gaz, chantiers de construction === */
 // ---------- Palette de rendu ----------
 const stoneShades = [];
 for (let s = 0; s < 14; s++) {
@@ -30,21 +30,16 @@ function onTileCleared(mx, my) {
   grid[i] = T_EMPTY; tileHP[i] = 0; tileMaxHP[i] = 0;
 }
 
-// Une case peut-elle apparaître dans un aperçu de surbrillance (survol de l'outil "Miner
-// vers", pinceau, zones) sans trahir le brouillard de guerre ? Sur une case jamais explorée,
-// on ne peut pas savoir si elle est minable ou non — il faut donc l'inclure systématiquement
-// (comme n'importe quelle autre case non explorée), sinon le simple fait qu'une case "manque"
-// dans la surbrillance révèle sa forme (ex. le contour d'une grotte cachée). Sur une case déjà
-// explorée, on n'affiche que si elle est réellement encore minable.
+// Une case peut-elle apparaître dans un aperçu de surbrillance
 function isHighlightableUnknownSafe(x, y) {
   if (!inBounds(x, y)) return false;
   if (fogEnabled && !exploredTile[idx(x, y)]) return true;
   return isMinable(x, y);
 }
 
-// ---------- Pathfinding (A*) avec gestion des diagonales ----------
-function findPath(startX, startY, targetX, targetY) {
-  const maxNodes = 600; 
+// ---------- Pathfinding (A*) avec gestion des diagonales et pénalité de minage ----------
+function findPath(startX, startY, targetX, targetY, canMine = false) {
+  const maxNodes = 1000; 
   let open = [{ x: startX, y: startY, g: 0, f: dist(startX, startY, targetX, targetY), parent: null }];
   let closed = new Set();
   
@@ -71,10 +66,20 @@ function findPath(startX, startY, targetX, targetY) {
         if (!isWalkable(curr.x + dx, curr.y) || !isWalkable(curr.x, curr.y + dy)) continue;
       }
 
-      if (!isWalkable(nx, ny) && !(nx === targetX && ny === targetY)) continue;
+      const isTarget = (nx === targetX && ny === targetY);
+      const isPassable = isWalkable(nx, ny) || isTarget;
+      const isObstacleMinable = canMine && isMinable(nx, ny);
+
+      if (!isPassable && !isObstacleMinable) continue;
       if (closed.has(nx + ',' + ny)) continue;
       
-      let g = curr.g + Math.hypot(dx, dy);
+      let stepCost = Math.hypot(dx, dy);
+      
+      if (!isWalkable(nx, ny) && isObstacleMinable && !isTarget) {
+         stepCost += 15; 
+      }
+
+      let g = curr.g + stepCost;
       let h = dist(nx, ny, targetX, targetY);
       let existing = open.find(n => n.x === nx && n.y === ny);
       
@@ -154,8 +159,6 @@ let nextSiteId = 1;
 const BUILD_POWER = 8;
 const WALL_BUILD_HP = 20, BARRACKS_BUILD_HP = 90, PILLAR_BUILD_HP = 30;
 const PILLAR_COST_PIERRE = 15, PILLAR_COST_BOIS = 10;
-// La tour de vision a une portée quasi infinie : seuls les obstacles l'arrêtent (voir
-// revealLOS / computeLOSVisibleTiles dans 05-fog-overview.js), pas une distance fixe.
 const PILLAR_VISION = VISION_MAX_RANGE;
 
 function siteAt(tx, ty) {
@@ -167,8 +170,5 @@ function completeSite(site) {
   else if (site.type === 'barracks') placeBuilding('barracks', site.x, site.y, site.w, site.h, 80, 'player');
   else if (site.type === 'pillar') placeBuilding('pillar', site.x, site.y, site.w, site.h, 40, 'player');
   sites = sites.filter(s => s !== site);
-  // Un nouveau mur/bâtiment peut ouvrir ou boucher une ligne de vue : on force un recalcul
-  // de la vision (mise en cache) des bâtiments au prochain frame plutôt que d'attendre
-  // jusqu'à une seconde.
   invalidateBuildingVision();
 }

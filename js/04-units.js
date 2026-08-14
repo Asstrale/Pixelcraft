@@ -1,4 +1,4 @@
-/* === 04-units.js — Unités : spawn, IA de déplacement/minage/construction (updateUnit) (original: lignes 575-880) === */
+/* === 04-units.js — Unités : spawn, IA de déplacement/minage/construction === */
 // ---------- Unités ----------
 let units = [];
 let nextUnitId = 1;
@@ -8,7 +8,7 @@ function spawnUnit(type, tx, ty) {
     x: tx + 0.5, y: ty + 0.5,
     order: null, mining: false, mineTarget: null, mineTimer: 0, zone: null,
     building: false, buildSite: null, buildTimer: 0, buildQueue: [],
-    carryType: null, carryAmount: 0, resumeTarget: null, resumeOrder: null,
+    inventory: { bois: 0, minerai: 0, pierre: 0 }, carryAmount: 0, resumeTarget: null, resumeOrder: null,
     stuckTimer: 0, stuckCheckX: undefined, stuckCheckY: undefined, avoid: null,
     hp: type === 'soldier' ? 40 : 20, maxhp: type === 'soldier' ? 40 : 20,
     speed: type === 'soldier' ? 1.7 : 2.0,
@@ -86,7 +86,7 @@ function zoneHasUnexplored(zone) {
 function nearestPointInZone(u, zone) {
   let best = null, bestD = Infinity;
   const consider = (xx, yy) => {
-    if (fogEnabled && exploredTile[idx(xx, yy)]) return; // déjà exploré : pas utile d'y retourner
+    if (fogEnabled && exploredTile[idx(xx, yy)]) return; 
     const d = (xx + 0.5 - u.x) ** 2 + (yy + 0.5 - u.y) ** 2;
     if (d < bestD) { bestD = d; best = { x: xx, y: yy }; }
   };
@@ -100,13 +100,6 @@ function nearestPointInZone(u, zone) {
   return { x: Math.floor(u.x), y: Math.floor(u.y) };
 }
 
-// Point de percée COMMUN à toute une zone (au lieu d'un point recalculé indépendamment par
-// chaque ouvrier d'après SA propre position) : le premier ouvrier qui en a besoin en choisit
-// un et le mémorise sur la zone elle-même (zone.breachPoint) ; tous les autres ouvriers
-// réutilisent ensuite ce même point tant qu'il reste à explorer, au lieu que chacun creuse son
-// propre tunnel séparé vers sa cible individuelle la plus proche. Une fois ce point atteint
-// (exploré), le cache est invalidé et un nouveau point est choisi pour la poche suivante s'il
-// en reste une.
 function zoneBreachPoint(u, zone) {
   const cached = zone.breachPoint;
   if (cached && (!fogEnabled || !exploredTile[idx(cached.x, cached.y)])) return cached;
@@ -115,18 +108,12 @@ function zoneBreachPoint(u, zone) {
   return fresh;
 }
 
-// Enregistre une case comme réellement ciblée pour le minage sous un ordre "tunnel" : la
-// surbrillance affichée (10-render.js) ne montre plus un tracé théorique précalculé, mais
-// exactement les cases que l'unité a effectivement décidé de miner, au fur et à mesure.
 function recordTunnelMine(u, o, x, y) {
-  if (o.kind !== 'tunnel') return;
+  if (o.kind !== 'tunnel' && o.kind !== 'harvest') return;
   u.tunnelPath = u.tunnelPath || [];
   if (!u.tunnelPath.some(p => p.x === x && p.y === y)) u.tunnelPath.push({ x, y });
 }
 
-// Une unité de priorité plus basse (id plus grand) occupe-t-elle déjà (ou s'approche-t-elle
-// de) la case de destination visée ? Priorité fixe par id : seule celle de priorité plus basse
-// attendra, jamais les deux à la fois (pas de blocage mutuel façon "personne ne bouge").
 function shouldYieldMovement(u, tx, ty) {
   for (const other of units) {
     if (other === u || other.id >= u.id) continue;
@@ -136,11 +123,8 @@ function shouldYieldMovement(u, tx, ty) {
   return false;
 }
 
-const YIELD_PATIENCE = 1.2; // secondes d'attente max avant de forcer le passage
+const YIELD_PATIENCE = 1.2;
 
-// Tente d'élargir un passage bloqué en minant une case voisine (perpendiculaire à la
-// direction de marche) : ne fait rien si l'unité n'est pas un ouvrier, ou si aucune des deux
-// cases voisines n'est minable (mur ou vide déjà dégagé, rien à creuser).
 function tryClearJam(u, dx, dy) {
   if (u.minePower <= 0) return false;
   const curX = Math.floor(u.x), curY = Math.floor(u.y);
@@ -154,19 +138,13 @@ function tryClearJam(u, dx, dy) {
   return false;
 }
 
-// Gère la cession de passage AVEC une patience bornée : sans limite, une unité pouvait
-// attendre indéfiniment une autre à l'arrêt (en train de miner, inactive...) même quand la
-// voie était large et bien dégagée ailleurs — c'était un vrai bug de blocage, pas juste un
-// ralentissement. Passé le délai, elle essaie d'abord de creuser une case voisine pour
-// élargir le passage (si elle est ouvrière), sinon elle avance quand même : un éventuel
-// chevauchement bref est résorbé par la répulsion mutuelle (voir update()).
 function handleYield(u, tx, ty, dx, dy, dt) {
   if (!shouldYieldMovement(u, tx, ty)) { u.yieldTimer = 0; return false; }
   u.yieldTimer = (u.yieldTimer || 0) + dt;
-  if (u.yieldTimer <= YIELD_PATIENCE) return true; // attend encore un peu
+  if (u.yieldTimer <= YIELD_PATIENCE) return true; 
   if (tryClearJam(u, dx, dy)) { u.yieldTimer = 0; return true; }
   u.yieldTimer = 0;
-  return false; // patience écoulée, rien à dégager : on avance quand même
+  return false; 
 }
 
 function updateUnit(u, dt) {
@@ -178,17 +156,10 @@ function updateUnit(u, dt) {
         const target = findNearestMinableInZone(u, u.zone);
         if (target) {
           u.order = { kind: 'harvest', x: target.x, y: target.y };
+          u.tunnelPath = [];
         } else if (zoneHasUnexplored(u.zone)) {
-          // rien d'exploré/minable dans la zone pour l'instant : on creuse vers un point à
-          // révéler, plutôt que d'abandonner tout de suite. Ce point est partagé par TOUTE la
-          // zone (zoneBreachPoint) : sans ça, chaque ouvrier calculait sa propre cible la plus
-          // proche de LUI et creusait son propre tunnel individuel, résultat plusieurs trous
-          // séparés au lieu d'un seul chemin commun emprunté par tout le groupe.
           const near = zoneBreachPoint(u, u.zone);
           u.order = { kind: 'tunnel', x: near.x, y: near.y };
-          // Nouvelle cible de tunnel : on repart d'une liste vide, remplie au fil de l'eau
-          // avec les cases réellement minées (voir recordTunnelMine) plutôt qu'un tracé
-          // théorique précalculé qui pouvait ne pas correspondre à ce qui est vraiment miné.
           u.tunnelPath = [];
         } else {
           u.zone = null;
@@ -206,9 +177,6 @@ function updateUnit(u, dt) {
   const o = u.order;
   const curX = Math.floor(u.x), curY = Math.floor(u.y);
 
-  // Garde-fou anti-blocage : si l'unité a un ordre de déplacement mais ne progresse plus
-  // du tout pendant plusieurs secondes (ni minage, ni construction en cours), on force un
-  // nouvel essai plutôt que de la laisser plantée indéfiniment.
   if (!u.mining && !u.building) {
     if (u.stuckCheckX === undefined || Math.hypot(u.x - u.stuckCheckX, u.y - u.stuckCheckY) > 0.15) {
       u.stuckCheckX = u.x; u.stuckCheckY = u.y; u.stuckTimer = 0;
@@ -245,8 +213,9 @@ function updateUnit(u, dt) {
       tileHP[i] -= u.minePower;
       if (tileHP[i] <= 0) {
         const resType = tType === T_WOOD ? 'bois' : tType === T_MINERAL ? 'minerai' : tType === T_STONE ? 'pierre' : null;
-        if (resType && u.carryAmount < CARRY_CAPACITY && (u.carryType === null || u.carryType === resType)) {
-          u.carryType = resType; u.carryAmount++;
+        if (resType && u.carryAmount < CARRY_CAPACITY) {
+          u.inventory[resType]++;
+          u.carryAmount++;
         }
         onTileCleared(mx, my);
         u.mining = false; u.mineTarget = null;
@@ -295,17 +264,20 @@ function updateUnit(u, dt) {
   } else if (o.kind === 'deposit') {
     const cheb = chebRectDist(curX, curY, baseBuilding.x, baseBuilding.y, baseBuilding.w, baseBuilding.h);
     if (cheb <= 1) {
-      if (u.carryType) {
-        let yieldMult = 1;
-        if (u.carryType === 'bois') yieldMult = WOOD_YIELD;
-        else if (u.carryType === 'minerai') yieldMult = MINERAL_YIELD;
-        else if (u.carryType === 'pierre') yieldMult = STONE_YIELD;
-        resources[u.carryType] += u.carryAmount * yieldMult;
+      if (u.carryAmount > 0) {
+        for (const [resType, amount] of Object.entries(u.inventory)) {
+          if (amount > 0) {
+            let yieldMult = 1;
+            if (resType === 'bois') yieldMult = WOOD_YIELD;
+            else if (resType === 'minerai') yieldMult = MINERAL_YIELD;
+            else if (resType === 'pierre') yieldMult = STONE_YIELD;
+            resources[resType] += amount * yieldMult;
+            u.inventory[resType] = 0;
+          }
+        }
       }
-      u.carryType = null; u.carryAmount = 0;
+      u.carryAmount = 0;
       if (u.resumeOrder && u.resumeOrder.kind === 'tunnel') {
-        // reprendre le trajet vers la destination lointaine d'origine, pas seulement
-        // la case qu'on était en train de miner quand l'inventaire s'est rempli
         u.order = { kind: 'tunnel', x: u.resumeOrder.x, y: u.resumeOrder.y };
       } else if (u.resumeTarget && isMinable(u.resumeTarget.x, u.resumeTarget.y)) {
         u.order = { kind: 'harvest', x: u.resumeTarget.x, y: u.resumeTarget.y };
@@ -317,9 +289,6 @@ function updateUnit(u, dt) {
     }
   }
 
-  // seuls les ordres qui ont explicitement le droit de miner (harvest = récolter une
-  // ressource précise, tunnel = outil "Miner vers") peuvent creuser en chemin ; un simple
-  // déplacement ('move') ne détruit jamais de blocs, même s'il est bloqué par de la roche.
   const canMineThrough = (o.kind === 'harvest' || o.kind === 'tunnel') && u.minePower > 0;
 
   let dx = Math.sign(o.x - curX), dy = Math.sign(o.y - curY);
@@ -328,7 +297,7 @@ function updateUnit(u, dt) {
   u.pathCooldown = (u.pathCooldown || 0) - dt;
   if (!u.path || u.pathTargetX !== o.x || u.pathTargetY !== o.y) {
     if (u.pathTargetX !== o.x || u.pathTargetY !== o.y || u.pathCooldown <= 0) {
-      u.path = findPath(curX, curY, o.x, o.y);
+      u.path = findPath(curX, curY, o.x, o.y, canMineThrough);
       u.pathTargetX = o.x; 
       u.pathTargetY = o.y;
       if (!u.path) u.pathCooldown = 1.0; 
@@ -343,17 +312,15 @@ function updateUnit(u, dt) {
     }
     
     if (u.path.length > 0) {
-      if (next.x === o.x && next.y === o.y && isMinable(next.x, next.y) && canMineThrough) {
+      if (!isWalkable(next.x, next.y) && isMinable(next.x, next.y) && canMineThrough) {
         if (Math.max(Math.abs(curX - next.x), Math.abs(curY - next.y)) <= 1) {
             u.mining = true; u.mineTarget = { x: next.x, y: next.y }; u.mineTimer = 0;
             recordTunnelMine(u, o, next.x, next.y);
             return;
         }
       }
+
       if (isWalkable(next.x, next.y)) {
-        // Cède le passage (avec patience bornée, voir handleYield) : le chrono anti-blocage
-        // n'est PAS remis à zéro ici — sinon une attente indéfinie derrière une unité à l'arrêt
-        // désactiverait le filet de sécurité anti-blocage général (voir plus haut dans updateUnit).
         const stepDx = Math.sign(next.x - curX), stepDy = Math.sign(next.y - curY);
         if (handleYield(u, next.x, next.y, stepDx, stepDy, dt)) return;
         stepUnitTo(u, next.x, next.y, dt);
@@ -364,8 +331,6 @@ function updateUnit(u, dt) {
     }
   }
 
-  // Pas de route déjà ouverte trouvée par A* : si l'ordre autorise le minage (harvest/tunnel),
-  // on creuse une ligne directe vers la cible au lieu de rester planté là ("stuck").
   let nx = curX + dx, ny = curY + dy;
   let canDiag = true;
   if (dx !== 0 && dy !== 0) {
@@ -391,8 +356,6 @@ function updateUnit(u, dt) {
     stepUnitTo(u, curX, curY + dy, dt); return;
   }
 
-  // vraiment coincé (par ex. cible entourée de murs, non minables) : on abandonne cet ordre
-  // pour laisser la logique de plus haut (zone, dépôt...) retenter avec une autre cible.
   if (o.kind === 'harvest') blacklistTile(u, o.x, o.y, 15);
   u.order = null;
   u.path = null;
