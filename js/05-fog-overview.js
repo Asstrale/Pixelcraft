@@ -86,6 +86,7 @@ function refreshBuildingVisionCache() {
       : b.type === 'pillar' ? PILLAR_VISION
       : b.type === 'outpost' ? OUTPOST_VISION
       : b.type === 'lab' ? LAB_VISION
+      : b.type === 'turret' ? TURRET_VISION
       : BARRACKS_VISION;
     // Le bâtiment ignore sa propre emprise comme obstacle (sinon il se bloquerait lui-même
     // dès la sortie de son empreinte), mais tout AUTRE bâtiment sur le chemin bloque bien.
@@ -100,7 +101,7 @@ function updateVision() {
 
   for (const u of units) {
     if (u.owner !== 'player') continue;
-    revealLOS(u.x, u.y, u.type === 'soldier' ? SOLDIER_VISION : WORKER_VISION);
+    revealLOS(u.x, u.y, u.type === 'worker' ? WORKER_VISION : SOLDIER_VISION); // toutes les unités de combat (COMBAT_UNIT_TYPES) partagent la vision du soldat, pour rester simple
   }
 
   if (gameTime - lastBuildingVisionRefresh >= BUILDING_VISION_REFRESH) {

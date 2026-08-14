@@ -26,6 +26,13 @@ const resources = { bois: 100, minerai: 100, pierre: 100 };
 // tout début (l'IA doit pouvoir se développer sans dépendre d'une reconnaissance qu'elle ne
 // simule pas) — valeur de prototype, à ajuster si l'IA se révèle trop faible/trop forte.
 const rivalResources = { bois: 120, minerai: 120, pierre: 80 };
+// Mémoire collective de repérage de l'IA rivale ("fourmis" éclaireuses) : liste de
+// { id, isBuilding, x, y, t } — dernière position connue d'un ennemi croisé par une unité
+// rivale (voir aiUpdateScouts dans 09-update.js), avec horodatage pour l'expiration
+// (AI_MEMORY_DURATION, 01-constants.js). C'est CETTE mémoire, pas une détection omnisciente,
+// qui guide désormais aiRunMilitary vers une cible lointaine — remplace l'ancien comportement
+// "l'IA sent un ennemi dans un rayon autour de chaque base" par un vrai modèle d'exploration.
+let rivalKnownEnemies = [];
 // Renvoie le pool de ressources du camp `owner` ('player' ou 'rival') — à utiliser partout où
 // une action (dépôt, dépense) doit créditer/débiter le BON camp plutôt que toujours celui du
 // joueur.
@@ -343,6 +350,7 @@ function completeSite(site) {
   else if (site.type === 'pillar') placeBuilding('pillar', site.x, site.y, site.w, site.h, 40, 'player');
   else if (site.type === 'outpost') placeBuilding('outpost', site.x, site.y, site.w, site.h, OUTPOST_HP, 'player');
   else if (site.type === 'lab') placeBuilding('lab', site.x, site.y, site.w, site.h, LAB_HP, 'player');
+  else if (site.type === 'turret') placeBuilding('turret', site.x, site.y, site.w, site.h, TURRET_HP, 'player');
   sites = sites.filter(s => s !== site);
   invalidateBuildingVision();
 }

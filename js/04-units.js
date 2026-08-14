@@ -6,13 +6,60 @@ let nextUnitId = 1;
 // Valeurs de BASE (avant recherche) par type d'unité — utilisées par applyResearchToUnit pour
 // calculer les stats effectives, jamais directement ailleurs (toujours passer par u.speed/
 // u.minePower/u.maxhp, qui reflètent déjà la recherche courante).
-function baseSpeedFor(type) { return type === 'soldier' ? 1.7 : 2.0; }
+// Soldat légèrement plus rapide qu'avant (1.7 -> 1.9, demande explicite du joueur) — toujours en
+// dessous de la vitesse d'un ouvrier (2.0), qui reste l'unité la plus véloce du jeu.
+function baseSpeedFor(type) {
+  if (type === 'worker') return 2.0;
+  if (type === 'soldier') return 1.9;
+  if (type === 'archer') return 1.9;      // aussi mobile qu'un soldat : vocation "tire et recule"
+  if (type === 'grenadier') return 1.6;   // plus lourd
+  if (type === 'cannoneer') return 1.3;   // unité de siège, lente
+  return 1.7;
+}
 function baseMinePowerFor(type) { return type === 'worker' ? HP_PER_RESOURCE : 0; }
-function baseMaxHpFor(type) { return type === 'soldier' ? 40 : 20; }
-// Combat (voir SOLDIER_ATTACK_DAMAGE/SOLDIER_ATTACK_RANGE dans 01-constants.js) : seul un
-// soldat inflige des dégâts et a une portée de tir — un ouvrier reste toujours à 0/0.
-function baseAttackDamageFor(type) { return type === 'soldier' ? SOLDIER_ATTACK_DAMAGE : 0; }
-function baseAttackRangeFor(type) { return type === 'soldier' ? SOLDIER_ATTACK_RANGE : 0; }
+function baseMaxHpFor(type) {
+  if (type === 'soldier') return 40;
+  if (type === 'archer') return 24;     // fragile, vocation "à distance" plutôt qu'au contact
+  if (type === 'grenadier') return 30;
+  if (type === 'cannoneer') return 34;
+  return 20; // worker
+}
+// Combat (voir 01-constants.js pour les constantes par type) : seules les unités de combat
+// (COMBAT_UNIT_TYPES) infligent des dégâts et ont une portée de tir — un ouvrier reste toujours
+// à 0/0 sur tous ces champs.
+function baseAttackDamageFor(type) {
+  if (type === 'soldier') return SOLDIER_ATTACK_DAMAGE;
+  if (type === 'archer') return ARCHER_ATTACK_DAMAGE;
+  if (type === 'grenadier') return GRENADIER_ATTACK_DAMAGE;
+  if (type === 'cannoneer') return CANNONEER_ATTACK_DAMAGE;
+  return 0;
+}
+function baseAttackRangeFor(type) {
+  if (type === 'soldier') return SOLDIER_ATTACK_RANGE;
+  if (type === 'archer') return ARCHER_ATTACK_RANGE;
+  if (type === 'grenadier') return GRENADIER_ATTACK_RANGE;
+  if (type === 'cannoneer') return CANNONEER_ATTACK_RANGE;
+  return 0;
+}
+function baseAttackCooldownFor(type) {
+  if (type === 'archer') return ARCHER_ATTACK_COOLDOWN;
+  if (type === 'grenadier') return GRENADIER_ATTACK_COOLDOWN;
+  if (type === 'cannoneer') return CANNONEER_ATTACK_COOLDOWN;
+  return ATTACK_COOLDOWN;
+}
+// Rayon de dégâts de zone (grenadier/canonnier) — 0 pour toute unité sans dégâts de zone (tir
+// simple sur la cible uniquement, voir updateCombat).
+function baseSplashRadiusFor(type) {
+  if (type === 'grenadier') return GRENADIER_SPLASH_RADIUS;
+  if (type === 'cannoneer') return CANNONEER_SPLASH_RADIUS;
+  return 0;
+}
+// Multiplicateur de dégâts contre bâtiments (et murs, voir wallBuster) — 1 = aucun bonus.
+function baseBuildingDamageMultFor(type) { return type === 'cannoneer' ? CANNONEER_BUILDING_DAMAGE_MULT : 1; }
+// Le canonnier peut faire exploser un mur (T_WALL) directement, pas seulement les bâtiments —
+// voir le ciblage de mur dans updateCombat plus bas, réponse concrète à "une unité qui explose
+// les murs".
+function isWallBuster(type) { return type === 'cannoneer'; }
 
 // Applique les niveaux de recherche courants (voir `research` dans 03-simulation.js) aux stats
 // d'UNE unité : vitesse, puissance de minage, PV max. Appelé à la fois à la création d'une
@@ -51,7 +98,9 @@ function spawnUnit(type, tx, ty, owner) {
     // (baseAttackDamageFor/baseAttackRangeFor) — un ouvrier reste totalement inoffensif, il ne
     // fait donc jamais rien dans updateCombat (sortie immédiate sur attackDamage === 0).
     attackDamage: 0, attackRange: 0, attackCooldown: ATTACK_COOLDOWN, attackTimer: 0,
-    stance: 'idle', holdX: null, holdY: null, // stance 'hold' = ordre "Défendre position" (defendPosition, voir 06-training-build.js)
+    splashRadius: 0, buildingDamageMult: 1, wallBuster: false, // dégâts de zone / anti-bâtiment / anti-mur (grenadier, canonnier — voir baseSplashRadiusFor etc. plus haut)
+    stance: 'idle', holdX: null, holdY: null, // stance 'hold' conservée pour compat (plus câblée à aucun bouton, voir defendPosition ci-dessous dans 06-training-build.js — remplacée par l'ordre 'defend' ciblé)
+    aiScout: false, // ouvrier rival désigné éclaireur ("fourmi" en exploration), voir aiUpdateScouts dans 09-update.js
     animSeed: Math.random() * 1000,
     path: null, pathTargetX: null, pathTargetY: null, pathCooldown: 0,
     yieldTimer: 0 // cumul du temps passé à céder le passage à une autre unité, voir handleYield plus bas
@@ -60,6 +109,10 @@ function spawnUnit(type, tx, ty, owner) {
   u.hp = u.maxhp; // naît à pleine vie (applyResearchToUnit préserve une PROPORTION de vie existante, non pertinent ici)
   u.attackDamage = baseAttackDamageFor(type);
   u.attackRange = baseAttackRangeFor(type);
+  u.attackCooldown = baseAttackCooldownFor(type);
+  u.splashRadius = baseSplashRadiusFor(type);
+  u.buildingDamageMult = baseBuildingDamageMultFor(type);
+  u.wallBuster = isWallBuster(type);
   units.push(u);
   return u;
 }
@@ -418,7 +471,10 @@ function updateCombat(u, dt) {
 
   let target = null, isBuilding = false;
 
-  if (u.order && u.order.kind === 'attack') {
+  // 'attack' ET 'defend' partagent la même logique d'engagement opportuniste ("si elle croise
+  // un ennemi dans son champ de vision elle attaque") — seule leur résolution d'arrivée diffère
+  // (voir updateUnit plus bas : 'defend' repart ensuite vers son point d'origine, 'attack' non).
+  if (u.order && (u.order.kind === 'attack' || u.order.kind === 'defend')) {
     let explicit = null, explicitIsBuilding = false;
     if (u.order.targetUnitId !== null && u.order.targetUnitId !== undefined) {
       const t = units.find(uu => uu.id === u.order.targetUnitId);
@@ -438,6 +494,13 @@ function updateCombat(u, dt) {
       const ex = explicitIsBuilding ? explicit.x + explicit.w / 2 : explicit.x;
       const ey = explicitIsBuilding ? explicit.y + explicit.h / 2 : explicit.y;
       if (Math.hypot(u.x - ex, u.y - ey) <= ATTACK_CHASE_RADIUS) { target = explicit; isBuilding = explicitIsBuilding; }
+    }
+    // Un canonnier (wallBuster) visant directement un mur (T_WALL) — clic droit "Attaquer" sur
+    // un mur ennemi, voir issueAttackOrderAtScreen dans 06-training-build.js — traite ce mur
+    // comme une cible à part entière, avec son propre marqueur __wallTile (voir plus bas).
+    if (!target && u.wallBuster) {
+      const wx = u.order.x, wy = u.order.y;
+      if (inBounds(wx, wy) && grid[idx(wx, wy)] === T_WALL) target = { __wallTile: true, x: wx, y: wy };
     }
     if (!target) {
       const found = findNearestEnemy(u.owner, u.x, u.y, ATTACK_ACQUIRE_RADIUS);
@@ -461,8 +524,9 @@ function updateCombat(u, dt) {
 
   if (!target) return false;
 
-  const tx = isBuilding ? target.x + target.w / 2 : target.x;
-  const ty = isBuilding ? target.y + target.h / 2 : target.y;
+  const isWallTile = !!target.__wallTile;
+  const tx = isWallTile ? target.x + 0.5 : (isBuilding ? target.x + target.w / 2 : target.x);
+  const ty = isWallTile ? target.y + 0.5 : (isBuilding ? target.y + target.h / 2 : target.y);
   const d = Math.hypot(u.x - tx, u.y - ty);
 
   if (d > u.attackRange) {
@@ -478,11 +542,72 @@ function updateCombat(u, dt) {
   // À portée : tir au rythme du cooldown plutôt qu'à chaque frame.
   u.attackTimer = (u.attackTimer || 0) - dt;
   if (u.attackTimer <= 0) {
-    applyDamage(target, isBuilding, u.attackDamage);
+    if (isWallTile) {
+      const ii = idx(target.x, target.y);
+      if (grid[ii] === T_WALL) {
+        tileHP[ii] -= u.attackDamage * (u.buildingDamageMult || 1);
+        if (tileHP[ii] <= 0) onTileCleared(target.x, target.y);
+      }
+    } else {
+      const dmgMult = isBuilding ? (u.buildingDamageMult || 1) : 1;
+      applyDamage(target, isBuilding, u.attackDamage * dmgMult);
+      // Dégâts de zone (grenadier/canonnier, voir baseSplashRadiusFor dans spawnUnit) : touche
+      // aussi tout ennemi (unité ou bâtiment) proche du point d'impact, à dégâts réduits (60%)
+      // par rapport au coup direct sur la cible principale — et, pour une unité "casse-mur"
+      // (wallBuster), fissure également tout mur (T_WALL) dans le rayon de l'explosion, même
+      // s'il n'était pas la cible visée : c'est ce qui permet à un canonnier de raser un mur en
+      // combattant simplement ce qui se trouve derrière.
+      if (u.splashRadius > 0) {
+        for (const ou of units) {
+          if (ou === target || ou.owner === u.owner || ou.hp <= 0) continue;
+          if (Math.hypot(ou.x - tx, ou.y - ty) <= u.splashRadius) applyDamage(ou, false, u.attackDamage * 0.6);
+        }
+        for (const ob of buildings) {
+          if (ob === target || ob.owner === u.owner || ob.hp <= 0) continue;
+          const ocx = ob.x + ob.w / 2, ocy = ob.y + ob.h / 2;
+          if (Math.hypot(ocx - tx, ocy - ty) <= u.splashRadius) applyDamage(ob, true, u.attackDamage * (u.buildingDamageMult || 1) * 0.6);
+        }
+        if (u.wallBuster) {
+          const rad = Math.ceil(u.splashRadius);
+          const cxT = Math.floor(tx), cyT = Math.floor(ty);
+          for (let yy = cyT - rad; yy <= cyT + rad; yy++) {
+            for (let xx = cxT - rad; xx <= cxT + rad; xx++) {
+              if (!inBounds(xx, yy)) continue;
+              if (Math.hypot(xx + 0.5 - tx, yy + 0.5 - ty) > u.splashRadius) continue;
+              const ii = idx(xx, yy);
+              if (grid[ii] === T_WALL) {
+                tileHP[ii] -= u.attackDamage * (u.buildingDamageMult || 1) * 0.6;
+                if (tileHP[ii] <= 0) onTileCleared(xx, yy);
+              }
+            }
+          }
+        }
+      }
+    }
     u.attackTimer = u.attackCooldown;
     hitSparks.push({ x: tx * TILE, y: ty * TILE, t: 0 }); // retour visuel du coup, voir 10-render.js
   }
   return true;
+}
+
+// Combat des BÂTIMENTS (tourelle) : se comporte comme un soldat immobile — détecte tout seul un
+// ennemi à portée (même détection omnisciente que findNearestEnemy pour les unités, voir son
+// commentaire) et riposte à cadence fixe, sans jamais se déplacer ni recevoir d'ordre explicite.
+// Appelé une fois par frame pour toutes les tourelles (voir update() dans 09-update.js), pas
+// dans updateUnit (une tourelle n'est pas dans le tableau `units`).
+function updateBuildingCombat(dt) {
+  for (const b of buildings) {
+    if (b.type !== 'turret' || b.hp <= 0) continue;
+    b.attackTimer = (b.attackTimer || 0) - dt;
+    const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+    const found = findNearestEnemy(b.owner, cx, cy, TURRET_ATTACK_RANGE);
+    if (!found || b.attackTimer > 0) continue;
+    const tx = found.isBuilding ? found.target.x + found.target.w / 2 : found.target.x;
+    const ty = found.isBuilding ? found.target.y + found.target.h / 2 : found.target.y;
+    applyDamage(found.target, found.isBuilding, TURRET_ATTACK_DAMAGE);
+    b.attackTimer = TURRET_ATTACK_COOLDOWN;
+    hitSparks.push({ x: tx * TILE, y: ty * TILE, t: 0 });
+  }
 }
 
 // Boucle d'IA principale d'une unité, appelée une fois par frame pour chaque unité (voir
@@ -648,6 +773,19 @@ function updateUnit(u, dt) {
   if (o.kind === 'move' && curX === o.x && curY === o.y) { u.order = null; return; }
   if (o.kind === 'tunnel' && curX === o.x && curY === o.y) { u.order = null; return; }
   if (o.kind === 'attack' && curX === o.x && curY === o.y) { u.order = null; return; } // point d'attaque-déplacement atteint sans avoir croisé d'ennemi
+  if (o.kind === 'defend' && curX === o.x && curY === o.y) {
+    // Zone atteinte sans (ou plus) d'ennemi à combattre (updateCombat aurait sinon empêché
+    // d'arriver jusqu'ici, voir plus haut) : repart vers le point d'origine mémorisé sur l'ordre
+    // (o.returnX/returnY) au lieu de s'arrêter là — c'est ce qui distingue "Défendre" d'
+    // "Attaquer" (voir issueDefendOrderAtScreen dans 06-training-build.js). Deuxième arrivée
+    // (déjà en phase 'return') : ordre terminé, l'unité redevient libre.
+    if (o.phase !== 'return') {
+      u.order = { kind: 'defend', x: Math.floor(o.returnX), y: Math.floor(o.returnY), targetUnitId: null, targetBuildingId: null, returnX: o.returnX, returnY: o.returnY, phase: 'return' };
+    } else {
+      u.order = null;
+    }
+    return;
+  }
 
   if (o.kind === 'harvest') {
     if (!isMinable(o.x, o.y)) { u.order = null; return; }

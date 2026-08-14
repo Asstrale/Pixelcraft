@@ -9,6 +9,15 @@
 const EMPTY_FLOOR_EXPLORED_COLOR = '#0c0c0c';
 const EMPTY_FLOOR_VISIBLE_COLOR = '#161616';
 
+// Couleurs de rendu par (camp, type d'unité) — voir drawUnit. Deux familles de couleurs
+// entièrement distinctes par camp (chaud pour le joueur, froid/bleuté pour le camp rival), pas
+// juste une nuance différente au sein de la même famille comme avant (bug de contraste
+// reporté : un soldat/ouvrier rival se confondait visuellement avec une unité du joueur).
+const UNIT_COLOR = {
+  player: { worker: '#f2f2ea', soldier: '#e0483f', archer: '#e3c23c', grenadier: '#e08a3f', cannoneer: '#c1543f' },
+  rival:  { worker: '#8fbfe8', soldier: '#3d6fd6', archer: '#5ad1e0', grenadier: '#4f8fd6', cannoneer: '#26407f' },
+};
+
 function drawTile(tx, ty, time) {
   const i = idx(tx, ty);
   const t = grid[i];
@@ -74,6 +83,9 @@ function drawBuilding(b) {
   else if (b.type === 'outpost') { fill = b.owner === 'player' ? '#c9975a' : '#8a4a6a'; stroke = b.owner === 'player' ? '#6a5228' : '#5a2a44'; }
   // Labo de recherche : violet, pour se démarquer nettement des bâtiments de production.
   else if (b.type === 'lab') { fill = '#8a6fd1'; stroke = '#4e3c85'; }
+  // Tourelle : gris-acier, pour évoquer un bâtiment défensif/militaire plutôt qu'un bâtiment de
+  // production — distincte de la caserne (rouge) et du labo (violet).
+  else if (b.type === 'turret') { fill = b.owner === 'player' ? '#8a97a8' : '#3d4f66'; stroke = b.owner === 'player' ? '#4a5568' : '#1e2a3a'; }
   else { fill = '#c1543f'; stroke = '#7a2f22'; }
   ctx.fillStyle = fill; ctx.fillRect(px, py, w, h);
   ctx.strokeStyle = stroke; ctx.lineWidth = 2; ctx.strokeRect(px + 1, py + 1, w - 2, h - 2);
@@ -107,7 +119,9 @@ function drawUnit(u, time) {
   if (fogEnabled && u.owner !== 'player' && !visibleNow[idx(Math.floor(u.x), Math.floor(u.y))]) return;
 
   const pulse = 1 + 0.16 * Math.sin(time * 3 + u.animSeed);
-  const base = u.type === 'soldier' ? TILE * 0.62 : TILE * 0.48;
+  // Taille par type : le canonnier (unité de siège lourde) se démarque visuellement par un
+  // gabarit plus large, les autres combattants gardent la taille "soldat" historique.
+  const base = u.type === 'cannoneer' ? TILE * 0.74 : (u.type === 'worker' ? TILE * 0.48 : TILE * 0.62);
   const size = base * pulse;
   const px = u.x * TILE, py = u.y * TILE;
   const isRival = u.owner !== 'player';
@@ -117,12 +131,14 @@ function drawUnit(u, time) {
     const r = size * 0.7;
     ctx.strokeRect(px - r, py - r, r * 2, r * 2);
   }
-  // Teinte différente pour le camp rival (même logique que la base rivale dans drawBuilding :
-  // famille de couleur "violette/magenta" plutôt que le rouge/blanc cassé du joueur) — sans ça,
-  // un soldat/ouvrier rival serait visuellement indiscernable d'une unité du joueur.
-  ctx.fillStyle = isRival
-    ? (u.type === 'soldier' ? '#c2517a' : '#b98fb0')
-    : (u.type === 'soldier' ? '#e0483f' : '#f2f2ea');
+  // Palette PAR CAMP nettement distincte (pas juste une teinte différente au sein de la même
+  // famille de couleur, voir le bug reporté "les ouvriers ennemis sont de la même couleur que
+  // alliés") : le joueur reste sur sa famille rouge/blanc cassé/ambre historique, le camp rival
+  // passe entièrement sur une famille bleu/cyan froide, sans aucun recouvrement de teinte —
+  // ambiguïté impossible même en jeu de pixels à petite échelle. Chaque type d'unité garde en
+  // plus sa propre nuance à l'intérieur de sa famille de camp (voir UNIT_COLOR ci-dessous,
+  // 01-constants.js n'étant pas le bon endroit pour du rendu pur).
+  ctx.fillStyle = (isRival ? UNIT_COLOR.rival : UNIT_COLOR.player)[u.type] || (isRival ? '#3d6fd6' : '#f2f2ea');
   ctx.fillRect(px - size / 2, py - size / 2, size, size);
 
   if (u.hp < u.maxhp) {

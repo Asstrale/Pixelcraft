@@ -88,17 +88,62 @@ const ATTACK_ACQUIRE_RADIUS = 6;
 // bloquée sur un obstacle non contourné.
 const ATTACK_CHASE_RADIUS = 10;
 
+// ---------- Unités à distance / de siège (nouvelles unités de caserne) ----------
+// Archer : léger et rapide, dégâts modestes mais portée bien supérieure à celle d'un soldat —
+// vocation "kite" (tire et recule), fragile au contact.
+const ARCHER_COST_BOIS = 15, ARCHER_COST_MINERAI = 20, ARCHER_TIME = 6;
+const ARCHER_ATTACK_DAMAGE = 6, ARCHER_ATTACK_RANGE = 6.5, ARCHER_ATTACK_COOLDOWN = 1.0;
+// Grenadier : dégâts de zone (splash) autour du point d'impact, efficace contre les groupes —
+// plus lent et plus cher qu'un soldat classique.
+const GRENADIER_COST_BOIS = 20, GRENADIER_COST_MINERAI = 35, GRENADIER_TIME = 8;
+const GRENADIER_ATTACK_DAMAGE = 10, GRENADIER_ATTACK_RANGE = 4.5, GRENADIER_ATTACK_COOLDOWN = 1.6;
+const GRENADIER_SPLASH_RADIUS = 1.6;
+// Canonnier : unité de siège — gros dégâts de zone, bonus important contre les bâtiments ET
+// capable de faire sauter un mur (T_WALL) directement (voir "wallBuster" dans updateCombat,
+// 04-units.js) — c'est LA réponse concrète à "une unité qui explose les murs". Lent et coûteux.
+const CANNONEER_COST_BOIS = 25, CANNONEER_COST_MINERAI = 45, CANNONEER_COST_PIERRE = 10, CANNONEER_TIME = 10;
+const CANNONEER_ATTACK_DAMAGE = 18, CANNONEER_ATTACK_RANGE = 5.5, CANNONEER_ATTACK_COOLDOWN = 1.8;
+const CANNONEER_SPLASH_RADIUS = 1.3;
+const CANNONEER_BUILDING_DAMAGE_MULT = 2.5; // multiplicateur de dégâts contre bâtiments ET murs
+
+// Tous les types d'unités capables de se battre (utilisé pour les filtres de sélection/ciblage
+// Attaquer-Défendre, et pour le décompte de garnison de l'IA — voir COMBAT_UNIT_TYPES ci-dessous)
+// plutôt que de tester `u.type === 'soldier'` un peu partout, ce qui aurait oublié les nouvelles
+// unités à chaque nouvel ajout.
+const COMBAT_UNIT_TYPES = ['soldier', 'archer', 'grenadier', 'cannoneer'];
+
+// ---------- Tourelle défensive (bâtiment) ----------
+// Structure statique auto-défensive, à mi-chemin entre le pilier (tour de vision) et un soldat
+// posté en garde : attaque automatiquement tout ennemi à portée sans jamais se déplacer (voir
+// updateBuildingCombat dans 04-units.js). Répond à la demande explicite du joueur ("ajoute peut
+// être une tourelle qui va défendre").
+const TURRET_SIZE = 1;
+const TURRET_COST_PIERRE = 30, TURRET_COST_MINERAI = 20;
+const TURRET_BUILD_HP = 40;
+const TURRET_HP = 150;
+const TURRET_ATTACK_DAMAGE = 10, TURRET_ATTACK_RANGE = 6, TURRET_ATTACK_COOLDOWN = 0.9;
+const TURRET_VISION = 8;
+
 // ---------- IA rivale ----------
 // L'IA ne gère qu'un seul camp partagé ('rival') : dans ce prototype, TOUTES les bases non-
 // joueur générées par NUM_PLAYERS appartiennent au même camp 'rival' (pas de distinction entre
 // elles), donc une seule IA "collective" pilote l'ensemble plutôt qu'une IA par base. Voir
 // updateRivalAI dans 09-update.js.
 const AI_TICK_INTERVAL = 2.5;      // secondes entre deux prises de décision de l'IA (pas besoin de recalculer à chaque frame)
-const AI_WORKER_TARGET_PER_BASE = 6;  // nombre d'ouvriers visé, par base/avant-poste rival
-const AI_SOLDIER_TARGET_PER_BASE = 4; // nombre de soldats de garnison visé, par base rivale
-const AI_ECONOMY_RADIUS = 22;      // rayon (cases) dans lequel l'IA cherche du minerai/bois/pierre autour d'une de ses bases
+const AI_WORKER_TARGET_PER_BASE = 5;  // nombre d'ouvriers visé, par base/avant-poste rival (abaissé de 6 à 5 : à 6, la formation d'ouvriers absorbait EN PERMANENCE tout le bois disponible et affamait indéfiniment la construction de casernes, voir aiTryBuildInfrastructure)
+const AI_SOLDIER_TARGET_PER_BASE = 5; // nombre de combattants de garnison visé, par base rivale (toutes unités de COMBAT_UNIT_TYPES confondues, pas seulement des soldats)
+const AI_TURRETS_TARGET_PER_BASE = 1; // nombre de tourelles défensives visé par base rivale
+const AI_ECONOMY_RADIUS = 38;      // rayon (cases) dans lequel l'IA cherche du minerai/bois/pierre autour d'une de ses bases — volontairement large : les poches de bois/minerai sont assez espacées sur la carte (voir targetPockets dans generateMap, 02-worldgen.js) pour qu'un rayon trop court laisse l'IA retomber sur la pierre dès qu'elle épuise la première poche trouvée (voir aiFindMinableNear)
 const AI_BUILDING_SEARCH_RADIUS = 30; // rayon dans lequel l'IA considère une caserne/un labo comme "à elle" pour une base donnée
-const AI_ATTACK_DETECTION_RADIUS = 18; // rayon autour de chaque bâtiment rival qui, une fois un ennemi détecté dedans, déclenche l'envoi de la garnison disponible pour riposter
+const AI_ATTACK_DETECTION_RADIUS = 18; // rayon autour de chaque bâtiment rival qui, une fois un ennemi détecté dedans, déclenche l'envoi de la garnison disponible pour riposter (repli "garde rapprochée", voir AI_DEFENSE_RADIUS)
+const AI_DEFENSE_RADIUS = 14; // détection immédiate ("un garde voit approcher") tout près d'une base, sans dépendre d'un éclaireur — reste volontairement plus petit que AI_ATTACK_DETECTION_RADIUS
+// Repérage actif ("fourmis" éclaireuses, voir aiUpdateScouts dans 09-update.js) : contrairement
+// à l'ancienne détection omnisciente (findNearestEnemy sur un large rayon autour de chaque
+// base), l'IA doit maintenant VRAIMENT croiser un ennemi (dans le champ de vision d'une de ses
+// unités) pour le mémoriser, puis envoyer des troupes vers cette position mémorisée.
+const AI_SCOUT_VISION = 7;
+const AI_SCOUTS_PER_BASE = 2;   // nombre d'ouvriers désignés éclaireurs en permanence par base
+const AI_MEMORY_DURATION = 90;  // secondes pendant lesquelles l'IA se souvient d'une position ennemie repérée avant de l'oublier
 
 // MINE_INTERVAL très bas (quasi 0) : le minage/la construction ne sont pas limités par un
 // "tick" perceptible, mais par les PV de la case/du chantier divisés par la puissance de

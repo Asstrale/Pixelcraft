@@ -61,6 +61,7 @@ canvas.addEventListener('mousedown', e => {
     if (buildMode || zoneMode || brushMode) { cancelBuildOrZoneMode(); return; }
     if (mineTool) { issueTunnelOrderAtScreen(e.offsetX, e.offsetY); return; }
     if (attackMode) { issueAttackOrderAtScreen(e.offsetX, e.offsetY); attackMode = false; updateBuildUI(); return; }
+    if (defendMode) { issueDefendOrderAtScreen(e.offsetX, e.offsetY); defendMode = false; updateBuildUI(); return; }
     issueOrderAtScreen(e.offsetX, e.offsetY);
   }
 });
@@ -123,7 +124,7 @@ window.addEventListener('keydown', e => {
   if (key === 'tab') e.preventDefault();
   keys.add(key);
   if (key === 'escape') {
-    if (buildMode || zoneMode || brushMode || mineTool || attackMode) cancelBuildOrZoneMode();
+    if (buildMode || zoneMode || brushMode || mineTool || attackMode || defendMode) cancelBuildOrZoneMode();
     else toggleEscMenu();
   }
 
@@ -131,9 +132,9 @@ window.addEventListener('keydown', e => {
     const u = units.find(un => un.id === id);
     return u && u.type === 'worker';
   });
-  const hasSoldier = Array.from(selectedIds).some(id => {
+  const hasCombatUnit = Array.from(selectedIds).some(id => {
     const u = units.find(un => un.id === id);
-    return u && u.type === 'soldier';
+    return u && COMBAT_UNIT_TYPES.includes(u.type);
   });
 
   if (hasWorker) {
@@ -148,19 +149,26 @@ window.addEventListener('keydown', e => {
       if (key === '3' || key === '"') startBuildMode('pillar');
       if (key === '4' || key === "'") startBuildMode('outpost');
       if (key === '5' || key === '(') startBuildMode('lab');
+      if (key === '6' || key === '-') startBuildMode('turret');
     }
   }
-  // Sélection de soldats (sans ouvrier mélangé dedans, sinon les raccourcis d'ouvrier ci-dessus
-  // priment déjà) : 1 = Attaquer (outil de ciblage), 2 = Défendre position (instantané).
-  else if (hasSoldier) {
+  // Sélection d'unités de combat (sans ouvrier mélangé dedans, sinon les raccourcis d'ouvrier
+  // ci-dessus priment déjà) : 1 = Attaquer (outil de ciblage), 2 = Défendre (outil de ciblage,
+  // voir startDefendMode).
+  else if (hasCombatUnit) {
     if (key === '1' || key === '&') startAttackMode();
-    if (key === '2' || key === 'é') defendPosition();
+    if (key === '2' || key === 'é') startDefendMode();
   }
   else if (selectedBuilding) {
     if (key === '1' || key === '&') {
       if (selectedBuilding.type === 'base' || selectedBuilding.type === 'outpost') trainWorker();
-      if (selectedBuilding.type === 'barracks') trainSoldier();
+      if (selectedBuilding.type === 'barracks') trainUnit('soldier');
       if (selectedBuilding.type === 'lab') startResearch('inventory');
+    }
+    if (selectedBuilding.type === 'barracks') {
+      if (key === '2' || key === 'é') trainUnit('archer');
+      if (key === '3' || key === '"') trainUnit('grenadier');
+      if (key === '4' || key === "'") trainUnit('cannoneer');
     }
     if (selectedBuilding.type === 'lab') {
       if (key === '2' || key === 'é') startResearch('speed');

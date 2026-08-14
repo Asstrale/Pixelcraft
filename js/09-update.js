@@ -53,6 +53,7 @@ function update(dt) {
   // }
 
   for (const u of units) updateUnit(u, dt);
+  updateBuildingCombat(dt); // tourelles : ripostent seules, sans passer par updateUnit (ce ne sont pas des unités, voir 04-units.js)
   updateBuildings(dt);
   updateResearch(dt);
   updateRivalAI(dt);
@@ -105,40 +106,75 @@ function updateRivalAI(dt) {
   const rivalBases = buildings.filter(b => b.owner === 'rival' && (b.type === 'base' || b.type === 'outpost'));
   if (rivalBases.length === 0) return; // toutes les bases rivales détruites : IA neutralisée, plus rien à décider
 
-  for (const base of rivalBases) aiRunEconomy(base);
+  // Ordre des passes, chacune SUR TOUTES LES BASES avant de passer à la suivante — c'est ce qui
+  // corrige le bug "aucune caserne, aucune troupe" : rivalResources est un pool COMMUN aux 3
+  // bases rivales (voir 03-simulation.js), et l'ancienne version traitait chaque base
+  // entièrement (ouvriers PUIS caserne PUIS soldats) avant de passer à la suivante — la première
+  // base de la liste épuisait alors la totalité du bois disponible dans sa propre quête
+  // d'ouvriers (AI_WORKER_TARGET_PER_BASE) avant même que les deux autres n'aient pu tenter quoi
+  // que ce soit. Ici, l'infrastructure (caserne, indispensable à tout le reste) est prioritaire
+  // pour TOUTES les bases avant qu'aucune ne commence à dépenser en ouvriers supplémentaires.
+  for (const base of rivalBases) aiTryBuildInfrastructure(base);
+  for (const base of rivalBases) aiTopUpWorkers(base);
+  for (const base of rivalBases) aiAssignIdleWorkers(base);
+  for (const base of rivalBases) aiTrainGarrison(base);
+
+  aiUpdateScouts(rivalBases);
   aiRunMilitary(rivalBases);
 }
 
-// Fait progresser l'économie d'UNE base rivale : complète son effectif d'ouvriers, affecte les
-// ouvriers inactifs à la ressource minable la plus proche, construit une caserne si elle n'en a
-// pas encore, et forme des soldats de garnison depuis toute caserne à proximité tant que
-// l'objectif (AI_SOLDIER_TARGET_PER_BASE) n'est pas atteint.
-function aiRunEconomy(base) {
-  const cx = base.x + base.w / 2, cy = base.y + base.h / 2;
-  const nearbyWorkers = units.filter(u => u.owner === 'rival' && u.type === 'worker' && dist(u.x, u.y, cx, cy) < 40);
+// Construit l'infrastructure d'UNE base rivale, par ordre de priorité : une caserne si elle n'en
+// a pas encore (condition absolue à tout le reste — pas de garnison possible sans elle), sinon
+// une tourelle défensive si elle n'a pas encore atteint son quota (AI_TURRETS_TARGET_PER_BASE).
+function aiTryBuildInfrastructure(base) {
+  const hasBarracks = buildings.some(b => b.owner === 'rival' && b.type === 'barracks' && dist(b.x, b.y, base.x, base.y) < AI_BUILDING_SEARCH_RADIUS);
+  if (!hasBarracks) { aiTryBuild(base, 'barracks'); return; }
+  const nearbyTurrets = buildings.filter(b => b.owner === 'rival' && b.type === 'turret' && dist(b.x, b.y, base.x, base.y) < AI_BUILDING_SEARCH_RADIUS).length;
+  if (nearbyTurrets < AI_TURRETS_TARGET_PER_BASE) aiTryBuild(base, 'turret');
+}
 
-  if (nearbyWorkers.length < AI_WORKER_TARGET_PER_BASE && rivalResources.bois >= WORKER_COST_BOIS) {
+// Complète l'effectif d'ouvriers d'UNE base rivale jusqu'à AI_WORKER_TARGET_PER_BASE.
+function aiTopUpWorkers(base) {
+  const cx = base.x + base.w / 2, cy = base.y + base.h / 2;
+  const nearbyWorkers = units.filter(u => u.owner === 'rival' && u.type === 'worker' && dist(u.x, u.y, cx, cy) < 40).length;
+  if (nearbyWorkers < AI_WORKER_TARGET_PER_BASE && rivalResources.bois >= WORKER_COST_BOIS) {
     rivalResources.bois -= WORKER_COST_BOIS;
     enqueueProduction(base, ['train'], 'worker'); // toujours un seul emplacement côté IA (pas de recherche "production" pour le camp rival)
   }
+}
 
+// Affecte les ouvriers inactifs d'UNE base rivale à la ressource minable la plus proche — ignore
+// les éclaireurs en mission (u.aiScout, voir aiUpdateScouts) : un ouvrier envoyé explorer ne doit
+// pas être aussitôt réaffecté au minage dès qu'il perd son ordre de déplacement en route.
+function aiAssignIdleWorkers(base) {
+  const cx = base.x + base.w / 2, cy = base.y + base.h / 2;
+  const nearbyWorkers = units.filter(u => u.owner === 'rival' && u.type === 'worker' && dist(u.x, u.y, cx, cy) < 40);
   for (const u of nearbyWorkers) {
-    if (u.order || u.mining || u.building || u.zone) continue; // déjà occupé, on ne le réaffecte pas
+    if (u.order || u.mining || u.building || u.zone || u.aiScout) continue; // déjà occupé, on ne le réaffecte pas
     const target = aiFindMinableNear(base, AI_ECONOMY_RADIUS);
     if (target) u.order = { kind: 'harvest', x: target.x, y: target.y };
   }
+}
 
-  const hasBarracks = buildings.some(b => b.owner === 'rival' && b.type === 'barracks' && dist(b.x, b.y, base.x, base.y) < AI_BUILDING_SEARCH_RADIUS);
-  if (!hasBarracks) aiTryBuild(base, 'barracks');
-
+// Bag de tirage pour la composition de la garnison rivale : majoritairement des soldats, avec
+// un mélange d'archers/grenadiers/canonniers pour que l'IA ait aussi accès aux unités à
+// distance/de siège plutôt que de spammer un seul type.
+const AI_GARRISON_MIX = ['soldier', 'soldier', 'archer', 'grenadier', 'soldier', 'cannoneer'];
+// Forme des combattants (toute unité de COMBAT_UNIT_TYPES, pas seulement des soldats) depuis
+// toute caserne proche d'UNE base rivale, tant que l'objectif de garnison n'est pas atteint.
+function aiTrainGarrison(base) {
+  const cx = base.x + base.w / 2, cy = base.y + base.h / 2;
   const nearbyBarracks = buildings.filter(b => b.owner === 'rival' && b.type === 'barracks' && dist(b.x, b.y, base.x, base.y) < AI_BUILDING_SEARCH_RADIUS);
-  const nearbySoldierCount = units.filter(u => u.owner === 'rival' && u.type === 'soldier' && dist(u.x, u.y, cx, cy) < 40).length;
-  if (nearbySoldierCount < AI_SOLDIER_TARGET_PER_BASE) {
-    for (const bk of nearbyBarracks) {
-      if (rivalResources.bois >= SOLDIER_COST_BOIS && rivalResources.minerai >= SOLDIER_COST_MINERAI) {
-        rivalResources.bois -= SOLDIER_COST_BOIS; rivalResources.minerai -= SOLDIER_COST_MINERAI;
-        enqueueProduction(bk, ['train'], 'soldier');
-      }
+  if (nearbyBarracks.length === 0) return;
+  const nearbyCombatCount = units.filter(u => u.owner === 'rival' && COMBAT_UNIT_TYPES.includes(u.type) && dist(u.x, u.y, cx, cy) < 40).length;
+  if (nearbyCombatCount >= AI_SOLDIER_TARGET_PER_BASE) return;
+  for (const bk of nearbyBarracks) {
+    const pick = AI_GARRISON_MIX[Math.floor(Math.random() * AI_GARRISON_MIX.length)];
+    const spec = UNIT_TRAIN_TYPES[pick];
+    const affordable = Object.entries(spec.cost).every(([res, amount]) => rivalResources[res] >= amount);
+    if (affordable) {
+      for (const [res, amount] of Object.entries(spec.cost)) rivalResources[res] -= amount;
+      enqueueProduction(bk, ['train'], pick);
     }
   }
 }
@@ -149,15 +185,31 @@ function aiRunEconomy(base) {
 // ouvriers rivaux restent groupés près de leur territoire plutôt que de s'éparpiller.
 function aiFindMinableNear(base, radius) {
   const cx = Math.floor(base.x + base.w / 2), cy = Math.floor(base.y + base.h / 2);
-  let best = null, bestD = Infinity;
+  // Préfère nettement le bois/minerai à la simple pierre : T_STONE est la roche de fond qui
+  // recouvre la majorité de la carte (voir generateMap, 02-worldgen.js) — elle forme un anneau
+  // quasi continu tout autour de chaque base et sera donc TOUJOURS plus proche que la moindre
+  // poche de ressource réelle. Sans cette préférence, "la case minable la plus proche" revenait
+  // systématiquement à grignoter cet anneau de pierre indéfiniment sans jamais atteindre une
+  // poche de bois/minerai un peu plus loin : c'était la VRAIE cause du bug "l'IA rivale ne
+  // construit/ne forme plus rien" (confirmé via un harness de diagnostic jsdom) — l'économie
+  // rivale se fossilisait sur la seule pierre après sa dépense de départ, plus aucun bois ni
+  // minerai ne rentrant jamais, ce qui affamait indéfiniment toute formation d'ouvriers/soldats
+  // et toute construction ultérieure (barracks/tourelle exceptées, déjà payées au tout départ).
+  let bestPriority = null, bestPriorityD = Infinity;
+  let bestStone = null, bestStoneD = Infinity;
   for (let yy = cy - radius; yy <= cy + radius; yy++) {
     for (let xx = cx - radius; xx <= cx + radius; xx++) {
       if (!inBounds(xx, yy) || !isMinable(xx, yy)) continue;
+      const t = grid[idx(xx, yy)];
       const d = (xx - cx) ** 2 + (yy - cy) ** 2;
-      if (d < bestD) { bestD = d; best = { x: xx, y: yy }; }
+      if (t === T_WOOD || t === T_MINERAL) {
+        if (d < bestPriorityD) { bestPriorityD = d; bestPriority = { x: xx, y: yy }; }
+      } else if (d < bestStoneD) { bestStoneD = d; bestStone = { x: xx, y: yy }; }
     }
   }
-  return best;
+  // Repli sur la pierre UNIQUEMENT si vraiment aucun bois/minerai n'est trouvé dans le rayon —
+  // mieux vaut miner de la pierre (utile pour murs/tourelles) que laisser l'ouvrier inactif.
+  return bestPriority || bestStone;
 }
 
 // Tente de construire `buildType` près d'une base rivale : vérifie le coût (pool rivalResources,
@@ -186,28 +238,103 @@ function aiTryBuild(base, buildType) {
   return false; // aucun emplacement libre trouvé dans le rayon de recherche : retentera au prochain tick
 }
 
-// Passe militaire globale : pour chaque base rivale, cherche la menace (unité ou bâtiment
-// ennemi) la plus proche dans un rayon de détection (AI_ATTACK_DETECTION_RADIUS) et, si elle en
-// trouve une, envoie tout soldat rival disponible à proximité l'intercepter — c'est ce qui
-// donne à l'IA le comportement "si elle trouve un ennemi, elle l'attaque" demandé, en plus de
-// la riposte de garde individuelle que chaque soldat fait déjà tout seul de très près (voir la
-// vigilance passive dans updateCombat, 04-units.js).
+// Repérage actif ("fourmis" éclaireuses) : remplace l'ancienne détection omnisciente par un vrai
+// modèle d'exploration — voir rivalKnownEnemies (03-simulation.js) et le commentaire d'ensemble
+// sur AI_SCOUT_VISION/AI_SCOUTS_PER_BASE/AI_MEMORY_DURATION dans 01-constants.js.
+//
+// 1) Toute unité rivale (pas seulement un éclaireur dédié) qui a un ennemi dans son PROPRE champ
+//    de vision (AI_SCOUT_VISION) met à jour la mémoire collective — un soldat de garnison qui
+//    croise un ennemi "prévient" la colonie tout autant qu'un éclaireur.
+// 2) Désigne/renouvelle jusqu'à AI_SCOUTS_PER_BASE ouvriers par base comme éclaireurs
+//    (u.aiScout), envoyés vers un point aléatoire de plus en plus loin de leur base via un
+//    simple ordre 'move' (le pathfinding normal du jeu, pas un système dédié) — une fois arrivés
+//    (ou bloqués), ils sont libérés et retournent au travail normal (voir aiAssignIdleWorkers).
+// 3) Oublie les sightings trop anciens (AI_MEMORY_DURATION) : une position qui a pu changer
+//    depuis ne doit pas guider une attaque indéfiniment.
+function aiUpdateScouts(rivalBases) {
+  for (const u of units) {
+    if (u.owner !== 'rival') continue;
+    const found = findNearestEnemy('rival', u.x, u.y, AI_SCOUT_VISION);
+    if (found) aiRememberEnemy(found);
+  }
+
+  for (const base of rivalBases) {
+    const cx = base.x + base.w / 2, cy = base.y + base.h / 2;
+    const nearbyWorkers = units.filter(u => u.owner === 'rival' && u.type === 'worker' && dist(u.x, u.y, cx, cy) < 50);
+    for (const u of nearbyWorkers) {
+      if (u.aiScout && !u.order) u.aiScout = false; // arrivé (ou bloqué) : libéré, reprendra le travail normal via aiAssignIdleWorkers
+    }
+    const stillActive = nearbyWorkers.filter(u => u.aiScout).length;
+    if (stillActive >= AI_SCOUTS_PER_BASE) continue;
+    const idle = nearbyWorkers.filter(u => !u.aiScout && !u.order && !u.mining && !u.building && !u.zone);
+    for (let i = stillActive; i < AI_SCOUTS_PER_BASE && idle.length > 0; i++) {
+      const u = idle.pop();
+      const angle = Math.random() * Math.PI * 2;
+      const radius = 20 + Math.random() * 60;
+      const tx = clamp(Math.round(cx + Math.cos(angle) * radius), 0, MAP_W - 1);
+      const ty = clamp(Math.round(cy + Math.sin(angle) * radius), 0, MAP_H - 1);
+      u.aiScout = true;
+      u.order = { kind: 'move', x: tx, y: ty };
+    }
+  }
+
+  rivalKnownEnemies = rivalKnownEnemies.filter(e => gameTime - e.t < AI_MEMORY_DURATION);
+}
+
+// Mémorise/rafraîchit la position d'un ennemi repéré (voir aiUpdateScouts) — une entrée par
+// (id, isBuilding) : revoir le même ennemi met juste à jour sa position et son horodatage plutôt
+// que d'empiler des doublons.
+function aiRememberEnemy(found) {
+  const isBuilding = found.isBuilding;
+  const id = found.target.id;
+  const x = isBuilding ? found.target.x + found.target.w / 2 : found.target.x;
+  const y = isBuilding ? found.target.y + found.target.h / 2 : found.target.y;
+  const existing = rivalKnownEnemies.find(e => e.isBuilding === isBuilding && e.id === id);
+  if (existing) { existing.x = x; existing.y = y; existing.t = gameTime; }
+  else rivalKnownEnemies.push({ id, isBuilding, x, y, t: gameTime });
+}
+
+// Passe militaire globale : pour chaque base rivale, réagit d'abord à toute menace IMMÉDIATE
+// tout près d'elle (AI_DEFENSE_RADIUS, comportement de "garde" — pas besoin d'un éclaireur pour
+// voir un ennemi arriver à sa porte), sinon se fie à la mémoire collective de reconnaissance
+// (rivalKnownEnemies, voir aiUpdateScouts) pour envoyer ses troupes vers la dernière position
+// ennemie connue — "si elles tombent sur une colonie ennemie, elles envoient les troupes". Les
+// combattants envoyés reçoivent un ordre 'defend' (pas 'attack') ancré sur LEUR PROPRE base : ils
+// engagent tout ennemi croisé en chemin (voir updateCombat, 04-units.js) puis reviennent
+// automatiquement garnisonner leur base une fois la zone dégagée, plutôt que de rester plantés
+// sur la cible ou de continuer à s'éparpiller.
 function aiRunMilitary(rivalBases) {
   for (const base of rivalBases) {
     const cx = base.x + base.w / 2, cy = base.y + base.h / 2;
-    const threat = findNearestEnemy('rival', cx, cy, AI_ATTACK_DETECTION_RADIUS);
-    if (!threat) continue;
-    const tx = threat.isBuilding ? threat.target.x + threat.target.w / 2 : threat.target.x;
-    const ty = threat.isBuilding ? threat.target.y + threat.target.h / 2 : threat.target.y;
+    const closeThreat = findNearestEnemy('rival', cx, cy, AI_DEFENSE_RADIUS);
+    let tx, ty, targetUnitId = null, targetBuildingId = null;
+
+    if (closeThreat) {
+      tx = closeThreat.isBuilding ? closeThreat.target.x + closeThreat.target.w / 2 : closeThreat.target.x;
+      ty = closeThreat.isBuilding ? closeThreat.target.y + closeThreat.target.h / 2 : closeThreat.target.y;
+      targetUnitId = closeThreat.isBuilding ? null : closeThreat.target.id;
+      targetBuildingId = closeThreat.isBuilding ? closeThreat.target.id : null;
+    } else {
+      let best = null, bestD = Infinity;
+      for (const e of rivalKnownEnemies) {
+        const d = dist(cx, cy, e.x, e.y);
+        if (d < bestD) { bestD = d; best = e; }
+      }
+      if (!best || bestD > AI_ATTACK_DETECTION_RADIUS * 3) continue; // rien de connu d'assez proche pour justifier de dégarnir la base
+      tx = best.x; ty = best.y;
+      targetUnitId = best.isBuilding ? null : best.id;
+      targetBuildingId = best.isBuilding ? best.id : null;
+    }
+
     for (const u of units) {
-      if (u.owner !== 'rival' || u.type !== 'soldier') continue;
+      if (u.owner !== 'rival' || !COMBAT_UNIT_TYPES.includes(u.type)) continue;
+      if (u.aiScout) continue; // un éclaireur en mission d'exploration n'est jamais réquisitionné pour attaquer
       if (dist(u.x, u.y, cx, cy) > 40) continue; // ne dégarnit pas les bases lointaines pour une menace purement locale
-      if (u.order && u.order.kind === 'attack') continue; // déjà engagé sur sa propre cible
+      if (u.order && u.order.kind === 'defend') continue; // déjà engagé sur sa propre riposte
       u.stance = 'idle';
       u.order = {
-        kind: 'attack', x: Math.floor(tx), y: Math.floor(ty),
-        targetUnitId: threat.isBuilding ? null : threat.target.id,
-        targetBuildingId: threat.isBuilding ? threat.target.id : null,
+        kind: 'defend', x: Math.floor(tx), y: Math.floor(ty),
+        targetUnitId, targetBuildingId, returnX: cx, returnY: cy, phase: 'out',
       };
     }
   }

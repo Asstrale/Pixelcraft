@@ -3,7 +3,7 @@
 // Démarre effectivement une production dans un emplacement (train/train2) donné : minuteur
 // réinitialisé selon le type d'unité (voir WORKER_TIME/SOLDIER_TIME dans 01-constants.js).
 function startProductionInSlot(b, slotKey, type) {
-  const time = type === 'worker' ? WORKER_TIME : SOLDIER_TIME;
+  const time = type === 'worker' ? WORKER_TIME : (UNIT_TRAIN_TYPES[type] ? UNIT_TRAIN_TYPES[type].time : SOLDIER_TIME);
   b[slotKey] = { active: true, type, timeLeft: time, totalTime: time };
 }
 
@@ -70,18 +70,33 @@ function trainWorker() {
   resources.bois -= WORKER_COST_BOIS;
   enqueueProduction(b, slotKeys, 'worker');
 }
-// Même principe que trainWorker, mais depuis une caserne et avec un coût bois+minerai — la
-// caserne n'a qu'un seul emplacement actif (pas de train2, même avec la recherche "production"),
-// mais bénéficie elle aussi de la file d'attente.
-function trainSoldier() {
+// Table de config par type d'unité formable EN CASERNE (soldat + les 3 nouvelles unités à
+// distance/de siège, voir 01-constants.js) — même principe que BUILD_TYPES plus bas : évite une
+// chaîne de fonctions quasi identiques (trainSoldier/trainArcher/...) et sert de source commune
+// à la fois au joueur (trainUnit) et à l'IA rivale (aiTrainGarrison, voir 09-update.js).
+const UNIT_TRAIN_TYPES = {
+  soldier:   { cost: { bois: SOLDIER_COST_BOIS, minerai: SOLDIER_COST_MINERAI }, time: SOLDIER_TIME, label: 'Soldat' },
+  archer:    { cost: { bois: ARCHER_COST_BOIS, minerai: ARCHER_COST_MINERAI }, time: ARCHER_TIME, label: 'Archer' },
+  grenadier: { cost: { bois: GRENADIER_COST_BOIS, minerai: GRENADIER_COST_MINERAI }, time: GRENADIER_TIME, label: 'Grenadier' },
+  cannoneer: { cost: { bois: CANNONEER_COST_BOIS, minerai: CANNONEER_COST_MINERAI, pierre: CANNONEER_COST_PIERRE }, time: CANNONEER_TIME, label: 'Canonnier' },
+};
+
+// Lance (ou met en file d'attente) la production d'une unité de combat depuis la caserne
+// sélectionnée — la caserne n'a qu'un seul emplacement actif (pas de train2, même avec la
+// recherche "production"), mais bénéficie elle aussi de la file d'attente (voir enqueueProduction).
+function trainUnit(type) {
   if (!selectedBuilding || selectedBuilding.owner !== 'player' || selectedBuilding.type !== 'barracks') return; // voir la note owner dans trainWorker ci-dessus
+  const spec = UNIT_TRAIN_TYPES[type];
+  if (!spec) return;
   const b = selectedBuilding;
   const busy = b.train && b.train.active;
   if (busy && (b.trainQueue || []).length >= TRAIN_QUEUE_MAX) return;
-  if (resources.bois < SOLDIER_COST_BOIS || resources.minerai < SOLDIER_COST_MINERAI) return;
-  resources.bois -= SOLDIER_COST_BOIS; resources.minerai -= SOLDIER_COST_MINERAI;
-  enqueueProduction(b, ['train'], 'soldier');
+  for (const [res, amount] of Object.entries(spec.cost)) if (resources[res] < amount) return;
+  for (const [res, amount] of Object.entries(spec.cost)) resources[res] -= amount;
+  enqueueProduction(b, ['train'], type);
 }
+// Conservé pour compat (raccourci clavier '1' sur une caserne sélectionnée, voir 07-camera-input.js).
+function trainSoldier() { trainUnit('soldier'); }
 
 // ---------- Recherche (laboratoire) ----------
 // Coût en minerai du PROCHAIN niveau d'une amélioration à 4 niveaux (inventory/speed/drill/
@@ -147,6 +162,7 @@ const BUILD_TYPES = {
   pillar:   { w: 2,           h: 2,           cost: { pierre: PILLAR_COST_PIERRE, bois: PILLAR_COST_BOIS }, targetHp: PILLAR_BUILD_HP },
   outpost:  { w: OUTPOST_SIZE, h: OUTPOST_SIZE, cost: { bois: OUTPOST_COST_BOIS, pierre: OUTPOST_COST_PIERRE }, targetHp: OUTPOST_BUILD_HP },
   lab:      { w: LAB_SIZE,    h: LAB_SIZE,    cost: { bois: LAB_COST_BOIS, minerai: LAB_COST_MINERAI },   targetHp: LAB_BUILD_HP },
+  turret:   { w: TURRET_SIZE, h: TURRET_SIZE, cost: { pierre: TURRET_COST_PIERRE, minerai: TURRET_COST_MINERAI }, targetHp: TURRET_BUILD_HP },
 };
 
 // Lance un chantier de construction (mur/caserne/pilier/avant-poste/labo) à l'emplacement
@@ -202,6 +218,7 @@ function cancelBuildOrZoneMode() {
   brushMode = false;
   mineTool = false;
   attackMode = false;
+  defendMode = false;
   isBrushing = false;
   isRightBrushing = false;
   updateBuildUI();
@@ -214,39 +231,38 @@ function startMineTool() {
   const hasWorker = Array.from(selectedIds).some(id => units.find(u => u.id === id)?.type === 'worker');
   if (!hasWorker) { showToast('Sélectionnez des ouvriers'); return; }
   mineTool = !mineTool;
-  zoneMode = false; brushMode = false; buildMode = null; attackMode = false;
+  zoneMode = false; brushMode = false; buildMode = null; attackMode = false; defendMode = false;
   updateBuildUI();
 }
 
 // Active/désactive l'outil "Attaquer" (clic droit sur une cible — unité/bâtiment ennemi ou
-// simple point de la carte — pour y envoyer les soldats sélectionnés en attaque-déplacement,
-// voir issueAttackOrderAtScreen) pour les soldats actuellement sélectionnés.
+// simple point de la carte — pour y envoyer les unités de combat sélectionnées en
+// attaque-déplacement, voir issueAttackOrderAtScreen) : envoie via le pathfinding normal, engage
+// automatiquement tout ennemi croisé en chemin (voir updateCombat, 04-units.js), et NE revient
+// PAS d'elle-même une fois la destination atteinte (contrairement à "Défendre", voir
+// startDefendMode ci-dessous).
 function startAttackMode() {
   if (selectedIds.size === 0) return;
-  const hasSoldier = Array.from(selectedIds).some(id => units.find(u => u.id === id)?.type === 'soldier');
-  if (!hasSoldier) { showToast('Sélectionnez des soldats'); return; }
+  const hasCombatUnit = Array.from(selectedIds).some(id => { const u = units.find(uu => uu.id === id); return u && COMBAT_UNIT_TYPES.includes(u.type); });
+  if (!hasCombatUnit) { showToast('Sélectionnez des unités de combat'); return; }
   attackMode = !attackMode;
-  zoneMode = false; brushMode = false; buildMode = null; mineTool = false;
+  zoneMode = false; brushMode = false; buildMode = null; mineTool = false; defendMode = false;
   updateBuildUI();
 }
 
-// "Défendre position" (bouton instantané, pas un mode de ciblage à la souris comme
-// startAttackMode) : les soldats sélectionnés s'arrêtent là où ils sont et gardent ce point —
-// voir la stance 'hold' dans updateCombat (04-units.js), qui les fait riposter tout seuls si un
-// ennemi s'approche, et y retourner une fois la menace écartée.
-function defendPosition() {
-  let any = false;
-  for (const u of units) {
-    if (!selectedIds.has(u.id) || u.type !== 'soldier') continue;
-    u.zone = null;
-    u.mining = false; u.mineTarget = null; u.mineTimer = 0;
-    u.building = false; u.buildSite = null; u.resumeTarget = null; u.resumeOrder = null;
-    u.path = null; u.order = null;
-    u.stance = 'hold';
-    u.holdX = u.x; u.holdY = u.y;
-    any = true;
-  }
-  if (any) showToast('Position défendue');
+// Active/désactive l'outil "Défendre" — même principe de ciblage à la souris que "Attaquer"
+// (issueDefendOrderAtScreen ci-dessous), même engagement opportuniste en chemin, MAIS une fois
+// la zone atteinte (et débarrassée de tout ennemi), l'unité repart automatiquement vers sa
+// position d'origine (mémorisée au moment de l'ordre) au lieu de rester sur place ou de
+// continuer à avancer — c'est la seule différence avec "Attaquer" (voir le champ o.phase géré
+// dans updateUnit, 04-units.js).
+function startDefendMode() {
+  if (selectedIds.size === 0) return;
+  const hasCombatUnit = Array.from(selectedIds).some(id => { const u = units.find(uu => uu.id === id); return u && COMBAT_UNIT_TYPES.includes(u.type); });
+  if (!hasCombatUnit) { showToast('Sélectionnez des unités de combat'); return; }
+  defendMode = !defendMode;
+  zoneMode = false; brushMode = false; buildMode = null; mineTool = false; attackMode = false;
+  updateBuildUI();
 }
 
 // ---------- Sélection & zones de travail (Rect + Brush) ----------
@@ -263,6 +279,7 @@ let zoneMode = false;
 let brushMode = false;
 let mineTool = false;
 let attackMode = false; // outil "Attaquer" actif (voir startAttackMode / issueAttackOrderAtScreen)
+let defendMode = false; // outil "Défendre" actif (voir startDefendMode / issueDefendOrderAtScreen)
 let isBrushing = false;
 let isRightBrushing = false;
 let rightClickMoved = false;
@@ -412,13 +429,51 @@ function issueAttackOrderAtScreen(sx, sy) {
 
   let any = false;
   for (const u of units) {
-    if (!selectedIds.has(u.id) || u.type !== 'soldier') continue;
+    if (!selectedIds.has(u.id) || !COMBAT_UNIT_TYPES.includes(u.type)) continue;
     u.zone = null;
     u.mining = false; u.mineTarget = null; u.mineTimer = 0;
     u.building = false; u.buildSite = null; u.resumeTarget = null; u.resumeOrder = null;
     u.path = null;
     u.stance = 'idle'; // un ordre explicite prend le pas sur une éventuelle "défense de position" précédente
     u.order = { kind: 'attack', x: tile.x, y: tile.y, targetUnitId, targetBuildingId };
+    any = true;
+  }
+  if (any) pings.push({ x: tile.x * TILE + TILE / 2, y: tile.y * TILE + TILE / 2, t: 0 });
+}
+
+// Comme issueAttackOrderAtScreen (même ciblage bâtiment > unité ennemie > simple point), mais
+// pour l'outil "Défendre" (voir startDefendMode) : mémorise la position ACTUELLE de chaque unité
+// (o.returnX/returnY) avant de l'envoyer, pour qu'elle sache où revenir une fois la zone
+// débarrassée de tout ennemi (voir la résolution de l'ordre 'defend' dans updateUnit, 04-units.js).
+function issueDefendOrderAtScreen(sx, sy) {
+  if (selectedIds.size === 0) return;
+  const wp = screenToWorld(sx, sy);
+  const tile = worldToTile(wp);
+  if (!inBounds(tile.x, tile.y)) return;
+
+  const bAtTile = buildingAtTile(tile.x, tile.y);
+  let targetBuildingId = null, targetUnitId = null;
+  if (bAtTile && bAtTile.owner !== 'player') {
+    targetBuildingId = bAtTile.id;
+  } else {
+    let best = null, bestD = 1.2;
+    for (const u of units) {
+      if (u.owner === 'player') continue;
+      const d = Math.hypot(u.x - wp.x / TILE, u.y - wp.y / TILE);
+      if (d < bestD) { bestD = d; best = u; }
+    }
+    if (best) targetUnitId = best.id;
+  }
+
+  let any = false;
+  for (const u of units) {
+    if (!selectedIds.has(u.id) || !COMBAT_UNIT_TYPES.includes(u.type)) continue;
+    u.zone = null;
+    u.mining = false; u.mineTarget = null; u.mineTimer = 0;
+    u.building = false; u.buildSite = null; u.resumeTarget = null; u.resumeOrder = null;
+    u.path = null;
+    u.stance = 'idle';
+    u.order = { kind: 'defend', x: tile.x, y: tile.y, targetUnitId, targetBuildingId, returnX: u.x, returnY: u.y, phase: 'out' };
     any = true;
   }
   if (any) pings.push({ x: tile.x * TILE + TILE / 2, y: tile.y * TILE + TILE / 2, t: 0 });
@@ -436,6 +491,7 @@ function startZoneMode() {
   brushMode = false;
   mineTool = false;
   buildMode = null;
+  attackMode = false; defendMode = false;
   updateBuildUI();
 }
 
@@ -451,6 +507,7 @@ function startBrushMode() {
   zoneMode = false;
   mineTool = false;
   buildMode = null;
+  attackMode = false; defendMode = false;
   updateBuildUI();
 }
 

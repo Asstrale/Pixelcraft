@@ -72,7 +72,10 @@ function startBuildMode(type) {
 document.getElementById('commandcard').addEventListener('click', (e) => {
   const id = e.target && e.target.id;
   if (id === 'btn-train-worker') trainWorker();
-  else if (id === 'btn-train-soldier') trainSoldier();
+  else if (id === 'btn-train-soldier') trainUnit('soldier');
+  else if (id === 'btn-train-archer') trainUnit('archer');
+  else if (id === 'btn-train-grenadier') trainUnit('grenadier');
+  else if (id === 'btn-train-cannoneer') trainUnit('cannoneer');
   else if (id === 'btn-destroy-building') destroySelectedBuilding();
   else if (id === 'btn-destroy-wall') destroySelectedWall();
   else if (id === 'btn-zone') startZoneMode();
@@ -83,13 +86,14 @@ document.getElementById('commandcard').addEventListener('click', (e) => {
   else if (id === 'btn-build-pillar') startBuildMode('pillar');
   else if (id === 'btn-build-outpost') startBuildMode('outpost');
   else if (id === 'btn-build-lab') startBuildMode('lab');
+  else if (id === 'btn-build-turret') startBuildMode('turret');
   else if (id === 'btn-research-inventory') startResearch('inventory');
   else if (id === 'btn-research-speed') startResearch('speed');
   else if (id === 'btn-research-drill') startResearch('drill');
   else if (id === 'btn-research-resist') startResearch('resist');
   else if (id === 'btn-research-production') startResearch('production');
   else if (id === 'btn-attack') startAttackMode();
-  else if (id === 'btn-defend') defendPosition();
+  else if (id === 'btn-defend') startDefendMode();
   else if (id === 'tab-miner') { activeTab = 'miner'; lastActionsTab = null; updateHUD(); }
   else if (id === 'tab-construire') { activeTab = 'construire'; lastActionsTab = null; updateHUD(); }
   else {
@@ -120,8 +124,13 @@ function updateBuildUI() {
   
   const brushTools = document.getElementById('brush-tools');
   if (brushTools) brushTools.classList.toggle('hidden', !brushMode);
-  
-  canvas.style.cursor = attackMode ? 'crosshair' : (zoneMode || brushMode || mineTool) ? 'cell' : (buildMode ? 'copy' : 'crosshair');
+
+  const atkBtn = document.getElementById('btn-attack');
+  if (atkBtn) atkBtn.classList.toggle('active', attackMode);
+  const defBtn = document.getElementById('btn-defend');
+  if (defBtn) defBtn.classList.toggle('active', defendMode);
+
+  canvas.style.cursor = (attackMode || defendMode) ? 'crosshair' : (zoneMode || brushMode || mineTool) ? 'cell' : (buildMode ? 'copy' : 'crosshair');
 }
 
 let panelKey = null;
@@ -148,6 +157,14 @@ function pxIcon(rows, colorMap, size) {
 }
 const ICON_WORKER = pxIcon(['.WW.', 'WWWW', 'WWWW', '.WW.'], { W: '#f2f2ea' });
 const ICON_SOLDIER = pxIcon(['.RR.', 'RRRR', 'RRRR', '.RR.'], { R: '#e0483f' });
+// Archer : silhouette + arc bandé, jaune-ambre (distinct du rouge soldat).
+const ICON_ARCHER = pxIcon(['..A.A', '.AAA.', 'AAAAA', '.AAA.', '..A.A'], { A: '#e3c23c' });
+// Grenadier : petite grenade ronde avec goupille, orange (dégâts de zone).
+const ICON_GRENADIER = pxIcon(['.GG..', 'GGGG.', 'GGGGG', 'GGGGG', '.GG..'], { G: '#e08a3f' });
+// Canonnier : silhouette large + canon, brun-rouge foncé (unité de siège lourde).
+const ICON_CANNONEER = pxIcon(['CC...', 'CCCCC', 'CCCCC', 'CCCCC', 'CC...'], { C: '#c1543f' });
+// Tourelle : base + canon vertical, gris-acier (bâtiment défensif statique).
+const ICON_TURRET = pxIcon(['..T..', '.TTT.', 'TTTTT', 'TTTTT'], { T: '#8a97a8' });
 const ICON_ZONE = pxIcon(['A.A.', '....', '..A.', 'A.A.'], { A: '#e3a23c' });
 const ICON_BRUSH = pxIcon(['.AA..', '..AA.', '...A.', '..AA.', '.AA..'], { A: '#e3a23c' });
 const ICON_WALL = pxIcon(['TTTTT', 'T...T', 'TTTTT'], { T: '#d8cf9d' });
@@ -176,6 +193,12 @@ const ICON_RESEARCH_PRODUCTION = pxIcon(['P.P.P', '.PPP.', 'PPPPP', '.PPP.', 'P.
 const ICON_ATTACK = pxIcon(['....A', '...A.', '..A..', '.A...', 'AA...'], { A: '#e0483f' });
 // Défendre position : bouclier, bleu (distinct du bouclier "résistance" du labo, sarcelle).
 const ICON_DEFEND = pxIcon(['.DDD.', 'DDDDD', 'DDDDD', '.DDD.', '..D..'], { D: '#5a8fd1' });
+
+// Icône + libellé affichés dans les portraits de la sélection (voir rebuildPanel, cas 'units')
+// pour chaque type d'unité — table plutôt qu'un ternaire à rallonge, pour rester lisible avec
+// désormais 5 types d'unités possibles.
+const UNIT_PORTRAIT_ICON = { worker: ICON_WORKER, soldier: ICON_SOLDIER, archer: ICON_ARCHER, grenadier: ICON_GRENADIER, cannoneer: ICON_CANNONEER };
+const UNIT_PORTRAIT_LABEL = { worker: 'Ouvrier', soldier: 'Soldat', archer: 'Archer', grenadier: 'Grenadier', cannoneer: 'Canonnier' };
 
 // Génère le HTML d'un bouton d'action de la command card (icône + raccourci clavier affiché +
 // coût optionnel), utilisé pour tous les boutons construits dynamiquement dans rebuildPanel/refreshPanel.
@@ -208,19 +231,27 @@ function rebuildPanel(kind) {
     // Panneau générique en lecture seule pour TOUT bâtiment n'appartenant pas au joueur — voir
     // le commentaire sur ce kind dans updateHUD : jamais de bouton d'action ici, quel que soit
     // le type réel du bâtiment (base/caserne/avant-poste/labo rivaux).
-    const names = { base: 'Base rivale', barracks: 'Caserne rivale', outpost: 'Avant-poste rival', lab: 'Laboratoire rival', pillar: 'Pilier rival' };
+    const names = { base: 'Base rivale', barracks: 'Caserne rivale', outpost: 'Avant-poste rival', lab: 'Laboratoire rival', pillar: 'Pilier rival', turret: 'Tourelle rivale' };
     const label = names[selectedBuilding.type] || 'Bâtiment rival';
     info.innerHTML = '<h3>' + label + '</h3><div class="row"><span>PV</span><span id="panel-hp">-</span></div><div class="hint">Hors de contrôle — attaquez-le avec des soldats pour le détruire.</div>';
     unitsBox.innerHTML = ''; actions.innerHTML = '';
   } else if (kind === 'barracks') {
     info.innerHTML = '<h3>Caserne</h3><div class="row"><span>PV</span><span id="panel-hp">-</span></div>';
     unitsBox.innerHTML = '';
-    actions.innerHTML = actionBtnHtml('btn-train-soldier', '1', ICON_SOLDIER, 'Former Soldat', SOLDIER_COST_BOIS + 'B/' + SOLDIER_COST_MINERAI + 'M') +
+    actions.innerHTML =
+      actionBtnHtml('btn-train-soldier', '1', ICON_SOLDIER, 'Former Soldat', SOLDIER_COST_BOIS + 'B/' + SOLDIER_COST_MINERAI + 'M') +
+      actionBtnHtml('btn-train-archer', '2', ICON_ARCHER, 'Former Archer (portée)', ARCHER_COST_BOIS + 'B/' + ARCHER_COST_MINERAI + 'M') +
+      actionBtnHtml('btn-train-grenadier', '3', ICON_GRENADIER, 'Former Grenadier (zone)', GRENADIER_COST_BOIS + 'B/' + GRENADIER_COST_MINERAI + 'M') +
+      actionBtnHtml('btn-train-cannoneer', '4', ICON_CANNONEER, 'Former Canonnier (anti-mur/bâtiment)', CANNONEER_COST_BOIS + 'B/' + CANNONEER_COST_MINERAI + 'M/' + CANNONEER_COST_PIERRE + 'P') +
       '<div class="bar-bg" id="train-bar-bg" style="display:none;grid-column:1/-1;"><div class="bar-fill" id="train-bar-fill"></div></div>' +
       '<div class="hint" id="train-queue-hint" style="grid-column:1/-1;"></div>' +
       actionBtnHtml('btn-destroy-building', 'Suppr', ICON_DESTROY, 'Détruire (recycler)', '');
   } else if (kind === 'pillar') {
     info.innerHTML = '<h3>Pilier</h3><div class="row"><span>PV</span><span id="panel-hp">-</span></div><div class="hint">Tour de vision (portée quasi illimitée, bloquée par les obstacles).</div>';
+    unitsBox.innerHTML = '';
+    actions.innerHTML = actionBtnHtml('btn-destroy-building', 'Suppr', ICON_DESTROY, 'Détruire (recycler)', '');
+  } else if (kind === 'turret') {
+    info.innerHTML = '<h3>Tourelle</h3><div class="row"><span>PV</span><span id="panel-hp">-</span></div><div class="hint">Attaque automatiquement tout ennemi à portée (' + TURRET_ATTACK_RANGE + ' cases), sans jamais se déplacer.</div>';
     unitsBox.innerHTML = '';
     actions.innerHTML = actionBtnHtml('btn-destroy-building', 'Suppr', ICON_DESTROY, 'Détruire (recycler)', '');
   } else if (kind === 'outpost') {
@@ -266,9 +297,9 @@ function rebuildPanel(kind) {
       const div = document.createElement('div');
       div.className = 'unit-portrait';
       div.dataset.uid = u.id;
-      div.title = u.type === 'worker' ? 'Ouvrier' : 'Soldat';
+      div.title = UNIT_PORTRAIT_LABEL[u.type] || u.type;
       div.innerHTML = '<span class="icon" style="display:flex;align-items:center;justify-content:center;">' +
-        (u.type === 'worker' ? ICON_WORKER : ICON_SOLDIER) + '</span>' +
+        (UNIT_PORTRAIT_ICON[u.type] || ICON_WORKER) + '</span>' +
         '<div class="hpbar"><i style="width:' + Math.round(hpFrac * 100) + '%;background:' + (hpFrac < 0.3 ? 'var(--danger)' : 'var(--cyan)') + ';"></i></div>';
       frag.appendChild(div);
     }
@@ -322,8 +353,29 @@ function refreshPanel(kind) {
   } else if (kind === 'barracks') {
     const b = selectedBuilding;
     document.getElementById('panel-hp').textContent = Math.max(0, Math.round(b.hp)) + '/' + b.maxhp;
-    refreshTrainBar(b, resources.bois >= SOLDIER_COST_BOIS && resources.minerai >= SOLDIER_COST_MINERAI, 'btn-train-soldier');
+    // 4 types formables partagent le même (unique) emplacement de production 'train' — la barre
+    // de progression et la file d'attente sont donc communes, mais chaque bouton se désactive
+    // indépendamment selon SON PROPRE coût (voir UNIT_TRAIN_TYPES, 06-training-build.js).
+    const training = b.train && b.train.active;
+    const queueLen = (b.trainQueue || []).length;
+    const queueFull = training && queueLen >= TRAIN_QUEUE_MAX;
+    for (const [type, btnId] of [['soldier', 'btn-train-soldier'], ['archer', 'btn-train-archer'], ['grenadier', 'btn-train-grenadier'], ['cannoneer', 'btn-train-cannoneer']]) {
+      const btn = document.getElementById(btnId);
+      if (!btn) continue;
+      const spec = UNIT_TRAIN_TYPES[type];
+      const affordable = Object.entries(spec.cost).every(([res, amount]) => resources[res] >= amount);
+      btn.disabled = queueFull || !affordable;
+    }
+    const bg = document.getElementById('train-bar-bg'), fill = document.getElementById('train-bar-fill');
+    if (training) { bg.style.display = ''; fill.style.width = Math.round(100 * (1 - b.train.timeLeft / b.train.totalTime)) + '%'; }
+    else if (bg) bg.style.display = 'none';
+    const queueHint = document.getElementById('train-queue-hint');
+    if (queueHint) queueHint.textContent = queueLen > 0 ? ('En attente : ' + queueLen + '/' + TRAIN_QUEUE_MAX) : '';
   } else if (kind === 'pillar') {
+    const b = selectedBuilding;
+    const hpEl = document.getElementById('panel-hp');
+    if (hpEl) hpEl.textContent = Math.max(0, Math.round(b.hp)) + '/' + b.maxhp;
+  } else if (kind === 'turret') {
     const b = selectedBuilding;
     const hpEl = document.getElementById('panel-hp');
     if (hpEl) hpEl.textContent = Math.max(0, Math.round(b.hp)) + '/' + b.maxhp;
@@ -373,7 +425,8 @@ function refreshPanel(kind) {
             actionBtnHtml('btn-build-barracks', '2', ICON_BARRACKS, 'Caserne', BARRACKS_COST_BOIS + 'B/' + BARRACKS_COST_MINERAI + 'M') +
             actionBtnHtml('btn-build-pillar', '3', ICON_PILLAR, 'Pilier (tour de vision)', PILLAR_COST_PIERRE + 'P/' + PILLAR_COST_BOIS + 'B') +
             actionBtnHtml('btn-build-outpost', '4', ICON_OUTPOST, 'Avant-poste (base secondaire)', OUTPOST_COST_BOIS + 'B/' + OUTPOST_COST_PIERRE + 'P') +
-            actionBtnHtml('btn-build-lab', '5', ICON_LAB, 'Laboratoire de recherche', LAB_COST_BOIS + 'B/' + LAB_COST_MINERAI + 'M');
+            actionBtnHtml('btn-build-lab', '5', ICON_LAB, 'Laboratoire de recherche', LAB_COST_BOIS + 'B/' + LAB_COST_MINERAI + 'M') +
+            actionBtnHtml('btn-build-turret', '6', ICON_TURRET, 'Tourelle (défense automatique)', TURRET_COST_PIERRE + 'P/' + TURRET_COST_MINERAI + 'M');
         }
         actions.innerHTML =
           '<div id="cc-tabs" style="grid-column:1/-1;display:flex;gap:4px;margin-bottom:2px;">' +
@@ -398,15 +451,17 @@ function refreshPanel(kind) {
         document.getElementById('btn-build-outpost').classList.toggle('active', buildMode === 'outpost');
         document.getElementById('btn-build-lab').disabled = resources.bois < LAB_COST_BOIS || resources.minerai < LAB_COST_MINERAI;
         document.getElementById('btn-build-lab').classList.toggle('active', buildMode === 'lab');
+        document.getElementById('btn-build-turret').disabled = resources.pierre < TURRET_COST_PIERRE || resources.minerai < TURRET_COST_MINERAI;
+        document.getElementById('btn-build-turret').classList.toggle('active', buildMode === 'turret');
       }
     } else if (soldiers > 0) {
-      // Sélection de soldats sans aucun ouvrier mélangé dedans : boutons de combat plutôt que
-      // les onglets miner/construire (voir startAttackMode/defendPosition dans
+      // Sélection d'unités de combat sans aucun ouvrier mélangé dedans : boutons de combat
+      // plutôt que les onglets miner/construire (voir startAttackMode/startDefendMode dans
       // 06-training-build.js). lastActionsTab sert aussi ici de mémo pour ne reconstruire le
       // HTML qu'au changement réel de contenu, pas à chaque frame.
       if (lastActionsTab !== 'soldiers') {
         lastActionsTab = 'soldiers';
-        actions.innerHTML = actionBtnHtml('btn-attack', '1', ICON_ATTACK, 'Attaquer', '') + actionBtnHtml('btn-defend', '2', ICON_DEFEND, 'Défendre position', '');
+        actions.innerHTML = actionBtnHtml('btn-attack', '1', ICON_ATTACK, 'Attaquer (clic droit sur une cible/zone)', '') + actionBtnHtml('btn-defend', '2', ICON_DEFEND, 'Défendre (clic droit — revient ensuite)', '');
       }
     } else if (actions.innerHTML !== '') {
       actions.innerHTML = '';
@@ -437,6 +492,7 @@ function updateHUD() {
     if (selectedBuilding.owner !== 'player') kind = 'enemy-building';
     else if (selectedBuilding.type === 'base') kind = 'base';
     else if (selectedBuilding.type === 'pillar') kind = 'pillar';
+    else if (selectedBuilding.type === 'turret') kind = 'turret';
     else if (selectedBuilding.type === 'outpost') kind = 'outpost';
     else if (selectedBuilding.type === 'lab') kind = 'lab';
     else kind = 'barracks';
