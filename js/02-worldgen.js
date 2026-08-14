@@ -1,19 +1,30 @@
 /* === 02-worldgen.js — Bâtiments (registre) + génération procédurale de la carte (original: lignes 266-417) === */
 // ---------- Bâtiments ----------
-let buildings = [];
-let buildingsById = {};
+let buildings = [];         // liste de tous les bâtiments existants (toutes équipes confondues)
+let buildingsById = {};     // même liste, indexée par id pour un accès rapide (ex. lookup depuis buildingGrid)
 let nextBuildingId = 1;
-let baseBuilding = null;
-let spawnPoints = [];
-let spawnCX, spawnCY;
+let baseBuilding = null;    // raccourci vers la base du joueur (owner === 'player'), utilisé partout comme point de dépôt/référence
+let spawnPoints = [];       // { x, y, owner, base } pour chaque joueur/rival généré
+let spawnCX, spawnCY;       // coordonnées du point de spawn du joueur (caméra initiale, etc.)
 
+// Marque l'empreinte d'un bâtiment sur buildingGrid (chaque case de son rectangle pointe vers
+// son id) — c'est ce qui rend ces cases non franchissables (isWalkable) et bloquantes pour la
+// vision (voir castVisionRay dans 05-fog-overview.js), indépendamment du contenu de `grid`.
 function registerBuildingFootprint(b) {
   for (let yy = b.y; yy < b.y + b.h; yy++)
     for (let xx = b.x; xx < b.x + b.w; xx++)
       buildingGrid[idx(xx, yy)] = b.id;
 }
+// Crée et enregistre un nouveau bâtiment (rectangle x,y,w,h) avec ses PV, puis marque son
+// empreinte sur la grille — point d'entrée unique utilisé aussi bien pour les bases générées
+// au départ que pour les bâtiments terminés en jeu (voir completeSite dans 03-simulation.js).
 function placeBuilding(type, x, y, w, h, hp, owner) {
-  const b = { id: nextBuildingId++, type, x, y, w, h, hp, maxhp: hp, train: null, owner: owner || 'player' };
+  // train2 : seconde file de production en parallèle, utilisée uniquement par la base
+  // principale une fois l'amélioration "production" débloquée (voir trainWorker et
+  // updateBuildings dans 06-training-build.js). trainQueue : unités en attente qu'un
+  // emplacement (train/train2) se libère (voir enqueueProduction). research : état de la
+  // recherche en cours pour un laboratoire ({ key, timeLeft, totalTime }, voir startResearch).
+  const b = { id: nextBuildingId++, type, x, y, w, h, hp, maxhp: hp, train: null, train2: null, trainQueue: [], research: null, owner: owner || 'player' };
   buildings.push(b);
   buildingsById[b.id] = b;
   registerBuildingFootprint(b);
@@ -21,6 +32,8 @@ function placeBuilding(type, x, y, w, h, hp, owner) {
 }
 
 // ---------- Génération procédurale ----------
+// Creuse un disque plein de rayon r centré sur (cx,cy) — utilisé notamment pour dégager la
+// zone de spawn autour de chaque base (voir generateMap).
 function carveCircle(cx, cy, r, type) {
   for (let yy = cy - r; yy <= cy + r; yy++)
     for (let xx = cx - r; xx <= cx + r; xx++) {
@@ -28,6 +41,9 @@ function carveCircle(cx, cy, r, type) {
       if (dist(xx, yy, cx, cy) <= r) setTile(xx, yy, type);
     }
 }
+// Comme carveCircle mais avec un contour irrégulier (bruit pseudo-aléatoire déterministe basé
+// sur les coordonnées, pas Math.random, pour un motif stable case par case) — donne aux poches
+// et tunnels une forme organique plutôt que des cercles parfaits.
 function carveBlob(cx, cy, rBase, type) {
   const r = rBase + Math.random() * 1.5;
   for (let yy = Math.floor(cy - r - 2); yy <= cy + r + 2; yy++) {
@@ -40,26 +56,33 @@ function carveBlob(cx, cy, rBase, type) {
   }
 }
 
+// Génère une "poche" de caverne : une cavité vide centrée sur (cx,cy), avec 0 à 4 gisements
+// de ressource (bois ou minerai, tirés au hasard à chaque nœud) disposés en cercle autour du
+// centre de la poche. C'est l'unité de base répétée pour peupler toute la carte (voir
+// generateMap, targetPockets).
 function carvePocket(cx, cy) {
-  const r = 3 + Math.random() * 4.5; 
+  const r = 3 + Math.random() * 4.5;
   carveBlob(cx, cy, r, T_EMPTY);
   const roll = Math.random();
   const numNodes = roll < 0.12 ? 0 : roll < 0.42 ? 1 : roll < 0.72 ? 2 : roll < 0.92 ? 3 : 4;
   for (let n = 0; n < numNodes; n++) {
     const kind = Math.random() < 0.55 ? T_WOOD : T_MINERAL;
     const ang = Math.random() * Math.PI * 2;
-    const rad = r * (0.2 + Math.random() * 0.7); 
+    const rad = r * (0.2 + Math.random() * 0.7);
     const nx = Math.round(cx + Math.cos(ang) * rad);
     const ny = Math.round(cy + Math.sin(ang) * rad);
-    carveBlob(nx, ny, 0.5 + Math.random() * 0.8, kind); 
+    carveBlob(nx, ny, 0.5 + Math.random() * 0.8, kind);
   }
 }
 
+// Creuse un tunnel sinueux (pas une ligne droite) reliant deux poches (ax,ay)->(bx,by) : suit
+// la ligne directe mais lui applique un "wobble" perpendiculaire sinusoïdal + bruit aléatoire,
+// puis évide un petit blob à chaque étape le long de ce tracé.
 function carveTunnel(ax, ay, bx, by) {
   const steps = Math.ceil(dist(ax, ay, bx, by));
   const dirx = bx - ax, diry = by - ay;
   const len = Math.hypot(dirx, diry) || 1;
-  const px = -diry / len, py = dirx / len; 
+  const px = -diry / len, py = dirx / len; // vecteur perpendiculaire unitaire à la direction du tunnel, pour le décalage latéral (wobble)
   const phase = Math.random() * 10;
   for (let i = 0; i <= steps; i++) {
     const t = i / steps;
@@ -71,6 +94,10 @@ function carveTunnel(ax, ay, bx, by) {
   }
 }
 
+// Tire n points de spawn suffisamment espacés les uns des autres (au moins 45% de la largeur
+// de carte) par rejet aléatoire (jusqu'à 800 essais) ; si l'espace n'est pas assez grand pour
+// satisfaire cette contrainte, complète par un repli déterministe (coins opposés en alternance)
+// plutôt que de boucler indéfiniment.
 function pickSpawnPoints(n) {
   const margin = 42;
   const pts = [];
@@ -90,6 +117,8 @@ function pickSpawnPoints(n) {
   return pts;
 }
 
+// Place n poches de gaz (une case T_GAS chacune) sur des cases de roche pleine, à distance
+// raisonnable (>=16) de tout point de spawn pour ne pas piéger un joueur dès le départ.
 function placeGasPockets(n) {
   let placed = 0, attempts = 0;
   while (placed < n && attempts < 3000) {
@@ -104,6 +133,16 @@ function placeGasPockets(n) {
   }
 }
 
+// Point d'entrée de la génération de carte, appelé une fois au chargement (voir 11-loop-init.js).
+// Étapes : (1) remplit toute la carte de roche pleine et réinitialise toutes les grilles
+// d'état (brouillard, bâtiments...) ; (2) place les bases de chaque joueur/rival (NUM_PLAYERS,
+// voir 01-constants.js) sur des points de spawn bien espacés, en dégageant un disque autour de
+// chacune ; (3) sème un nombre cible de poches de ressources (targetPockets) réparties sur la
+// carte en évitant les zones de spawn et les poches déjà posées ; (4) relie certaines poches
+// voisines entre elles par des tunnels sinueux (35% de chance par poche, uniquement vers l'une
+// des 6 poches précédentes les plus proches) pour garantir un minimum de connectivité entre
+// cavités sans pour autant tout relier ; (5) sème des poches de gaz explosif dans la roche
+// restante.
 function generateMap() {
   grid.fill(T_STONE);
   for (let i = 0; i < tileSeed.length; i++) tileSeed[i] = randInt(0, 255);
@@ -116,7 +155,7 @@ function generateMap() {
   spawnPoints = [];
   const half = Math.floor(BASE_SIZE / 2);
   for (let p = 0; p < pts.length; p++) {
-    const owner = p === 0 ? 'player' : 'rival';
+    const owner = p === 0 ? 'player' : 'rival'; // le premier point de spawn tiré est toujours celui du joueur, les autres sont des rivaux (IA pas encore implémentée à ce stade du prototype)
     const cx = pts[p].x, cy = pts[p].y;
     carveCircle(cx, cy, SPAWN_CLEAR_RADIUS, T_EMPTY);
     const base = placeBuilding('base', cx - half, cy - half, BASE_SIZE, BASE_SIZE, 500, owner);
@@ -139,6 +178,9 @@ function generateMap() {
     carvePocket(px, py);
   }
 
+  // Connecte certaines poches à l'une de leurs voisines récentes (fenêtre des 6 précédentes,
+  // pas toutes) par un tunnel — assez pour garantir des chemins entre cavités sans transformer
+  // toute la carte en un unique réseau ouvert.
   for (let i = 1; i < centers.length; i++) {
     if (Math.random() > 0.35) continue;
     let bestJ = -1, bestD = Infinity;

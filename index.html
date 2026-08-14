@@ -35,12 +35,15 @@
   </div>
 
   <div id="help" class="hud-el">
-    <span class="h-title">CONTRÔLES</span>
-    <b>Clic gauche</b> : sélectionner (glisser = multi-sélection)<br>
-    <b>Clic droit</b> : déplacer (uniquement — plus de minage automatique)<br>
-    <b>ZQSD / Flèches</b> : caméra · <b>Molette</b> : zoom<br>
-    Sélectionnez des ouvriers : onglet <b>Miner</b> (Miner vers / Zone / Pinceau) ou <b>Construire</b> (Mur / Caserne / Pilier).<br>
-    <span class="warn">⚠ Des poches de gaz sont cachées dans la roche.</span>
+    <button id="help-toggle" title="Afficher/masquer les contrôles">▾</button>
+    <div id="help-content">
+      <span class="h-title">CONTRÔLES</span>
+      <b>Clic gauche</b> : sélectionner (glisser = multi-sélection)<br>
+      <b>Clic droit</b> : déplacer (uniquement — plus de minage automatique)<br>
+      <b>ZQSD / Flèches</b> : caméra · <b>Molette</b> : zoom<br>
+      Sélectionnez des ouvriers : onglet <b>Miner</b> (Miner vers / Zone / Pinceau) ou <b>Construire</b> (Mur / Caserne / Pilier).<br>
+      <span class="warn">⚠ Des poches de gaz sont cachées dans la roche.</span>
+    </div>
   </div>
 
   <div id="selbox"></div>
@@ -50,8 +53,8 @@
       <h3>Menu</h3>
       <label class="slider-row">
         <span>Taille de l'interface</span>
-        <input type="range" id="slider-ui-scale" min="0.8" max="1.8" step="0.05" value="1.8">
-        <span id="slider-ui-scale-val">1.80x</span>
+        <input type="range" id="slider-ui-scale" min="0.8" max="2.2" step="0.05" value="2.0">
+        <span id="slider-ui-scale-val">2.00x</span>
       </label>
       <label class="slider-row">
         <span>Brouillard de guerre</span>

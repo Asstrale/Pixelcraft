@@ -82,7 +82,11 @@ function refreshBuildingVisionCache() {
   const fresh = {};
   for (const b of buildings) {
     if (b.owner !== 'player') continue;
-    const r = b.type === 'base' ? BASE_VISION : b.type === 'pillar' ? PILLAR_VISION : BARRACKS_VISION;
+    const r = b.type === 'base' ? BASE_VISION
+      : b.type === 'pillar' ? PILLAR_VISION
+      : b.type === 'outpost' ? OUTPOST_VISION
+      : b.type === 'lab' ? LAB_VISION
+      : BARRACKS_VISION;
     // Le bâtiment ignore sa propre emprise comme obstacle (sinon il se bloquerait lui-même
     // dès la sortie de son empreinte), mais tout AUTRE bâtiment sur le chemin bloque bien.
     fresh[b.id] = computeLOSVisibleTiles(b.x + b.w / 2, b.y + b.h / 2, r, b.id);
@@ -146,7 +150,12 @@ function rebuildOverview() {
     const i0 = idx(bld.x, bld.y);
     let explored = !fogEnabled || bld.owner === 'player' || exploredTile[i0];
     if (!explored) continue;
-    const col = bld.type === 'base' ? (bld.owner === 'player' ? [209, 163, 92] : [138, 74, 106]) : [193, 84, 63];
+    // Minicarte simplifiée : l'avant-poste reprend la couleur de la base (même famille de
+    // bâtiment), le labo une teinte violette dédiée, le reste (caserne/pilier/mur) en rouge.
+    const col = (bld.type === 'base' || bld.type === 'outpost')
+      ? (bld.owner === 'player' ? [209, 163, 92] : [138, 74, 106])
+      : bld.type === 'lab' ? [138, 111, 209]
+      : [193, 84, 63];
     overviewCtx.fillStyle = `rgb(${col[0]},${col[1]},${col[2]})`;
     overviewCtx.fillRect(bld.x, bld.y, bld.w, bld.h);
   }

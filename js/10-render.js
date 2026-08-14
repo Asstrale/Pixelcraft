@@ -3,8 +3,11 @@
 // que des gris qui tranchent) : noir = jamais visité (rien dessiné, fond de la scène) / noir
 // à peine plus clair = déjà exploré mais hors du champ de vision actuel / encore un cran plus
 // clair = dans le champ de vision actuel (unité, tourelle, ou tout autre bâtiment allié).
-const EMPTY_FLOOR_EXPLORED_COLOR = '#0d0d0d';
-const EMPTY_FLOOR_VISIBLE_COLOR = '#111111';
+// Gris neutres (R=G=B, aucune teinte verte) : le palier "exploré" est assez écarté du fond de
+// scène (#050505) pour rester perceptible, le palier "visible" reste proche du noir plutôt que
+// de partir vers un gris-vert clair.
+const EMPTY_FLOOR_EXPLORED_COLOR = '#0c0c0c';
+const EMPTY_FLOOR_VISIBLE_COLOR = '#161616';
 
 function drawTile(tx, ty, time) {
   const i = idx(tx, ty);
@@ -66,6 +69,11 @@ function drawBuilding(b) {
   let fill, stroke;
   if (b.type === 'base') { fill = b.owner === 'player' ? '#d1a35c' : '#8a4a6a'; stroke = b.owner === 'player' ? '#7a5a2e' : '#5a2a44'; }
   else if (b.type === 'pillar') { fill = '#7fd1ae'; stroke = '#3c7a5e'; }
+  // Avant-poste : base secondaire, même famille de couleur que la base principale (teinte
+  // légèrement plus froide/bleutée pour rester identifiable au premier coup d'œil).
+  else if (b.type === 'outpost') { fill = b.owner === 'player' ? '#c9975a' : '#8a4a6a'; stroke = b.owner === 'player' ? '#6a5228' : '#5a2a44'; }
+  // Labo de recherche : violet, pour se démarquer nettement des bâtiments de production.
+  else if (b.type === 'lab') { fill = '#8a6fd1'; stroke = '#4e3c85'; }
   else { fill = '#c1543f'; stroke = '#7a2f22'; }
   ctx.fillStyle = fill; ctx.fillRect(px, py, w, h);
   ctx.strokeStyle = stroke; ctx.lineWidth = 2; ctx.strokeRect(px + 1, py + 1, w - 2, h - 2);
@@ -90,30 +98,38 @@ function drawSite(s) {
 }
 
 function drawUnit(u, time) {
+  // Une unité RIVALE ne se dessine que si elle est ACTUELLEMENT visible (visibleNow), pas
+  // seulement dans une case déjà explorée — contrairement à un bâtiment (statique, voir
+  // drawBuilding), une unité bouge : la mémoire de brouillard "déjà exploré" ne dit rien de sa
+  // position réelle une fois hors du champ de vision. Avant l'IA rivale (voir updateRivalAI
+  // dans 09-update.js), ce cas ne se produisait jamais (aucune unité 'rival' n'existait) ; sans
+  // ce filtre, les unités de l'IA seraient visibles en permanence, brouillard ou pas.
+  if (fogEnabled && u.owner !== 'player' && !visibleNow[idx(Math.floor(u.x), Math.floor(u.y))]) return;
+
   const pulse = 1 + 0.16 * Math.sin(time * 3 + u.animSeed);
   const base = u.type === 'soldier' ? TILE * 0.62 : TILE * 0.48;
   const size = base * pulse;
   const px = u.x * TILE, py = u.y * TILE;
+  const isRival = u.owner !== 'player';
 
-  // Sélection
   if (selectedIds.has(u.id)) {
     ctx.strokeStyle = '#e3a23c'; ctx.lineWidth = 1.5;
     const r = size * 0.7;
     ctx.strokeRect(px - r, py - r, r * 2, r * 2);
   }
-  
-  // Corps de l'unité
-  ctx.fillStyle = u.type === 'soldier' ? '#e0483f' : '#f2f2ea';
+  // Teinte différente pour le camp rival (même logique que la base rivale dans drawBuilding :
+  // famille de couleur "violette/magenta" plutôt que le rouge/blanc cassé du joueur) — sans ça,
+  // un soldat/ouvrier rival serait visuellement indiscernable d'une unité du joueur.
+  ctx.fillStyle = isRival
+    ? (u.type === 'soldier' ? '#c2517a' : '#b98fb0')
+    : (u.type === 'soldier' ? '#e0483f' : '#f2f2ea');
   ctx.fillRect(px - size / 2, py - size / 2, size, size);
 
-  // Barre de vie
   if (u.hp < u.maxhp) {
     const hpFrac = Math.max(0, u.hp / u.maxhp);
     ctx.fillStyle = '#222'; ctx.fillRect(px - size / 2, py - size / 2 - 5, size, 3);
     ctx.fillStyle = hpFrac < 0.3 ? '#d8544a' : '#4fd1c5'; ctx.fillRect(px - size / 2, py - size / 2 - 5, size * hpFrac, 3);
   }
-  
-  // Barre de minage
   if (u.mining && u.mineTarget) {
     const i = idx(u.mineTarget.x, u.mineTarget.y);
     if (tileMaxHP[i] > 0) {
@@ -123,32 +139,15 @@ function drawUnit(u, time) {
       ctx.fillStyle = '#e3a23c'; ctx.fillRect(bx, by, TILE * (1 - frac), 3);
     }
   }
-
-  // Inventaire multi-couleurs
-  if (u.inventory) {
-    const resourceColors = {
-      bois: '#a06a35',    // Marron
-      minerai: '#3f8fe0', // Bleu
-      pierre: '#9199a1'   // Gris
-    };
+  if (u.carryAmount > 0) {
+    const carryColor = u.carryType === 'bois' ? '#a06a35' : u.carryType === 'minerai' ? '#3f8fe0' : '#9199a1';
     const pxs = 3;
-    let slotIndex = 0;
-
-    // Dessine les ressources stockées
-    for (const [resType, count] of Object.entries(u.inventory)) {
-      if (count <= 0) continue;
-      ctx.fillStyle = resourceColors[resType] || '#ffffff';
-      for (let n = 0; n < count && slotIndex < CARRY_CAPACITY; n++) {
-        ctx.fillRect(px - size / 2 + slotIndex * (pxs + 1), py + size / 2 + 2, pxs, pxs);
-        slotIndex++;
-      }
-    }
-
-    // Dessine les emplacements vides restants
-    ctx.fillStyle = 'rgba(255,255,255,0.0)';
-    while (slotIndex < CARRY_CAPACITY) {
-      ctx.fillRect(px - size / 2 + slotIndex * (pxs + 1), py + size / 2 + 2, pxs, pxs);
-      slotIndex++;
+    // effectiveCarryCapacity() (03-simulation.js) et non la constante CARRY_CAPACITY brute :
+    // avec l'amélioration d'inventaire, la capacité réelle dépasse la base — sans ça, le
+    // surplus transporté au-delà de CARRY_CAPACITY restait invisible (boucle trop courte).
+    for (let n = 0; n < effectiveCarryCapacity(); n++) {
+      ctx.fillStyle = n < u.carryAmount ? carryColor : 'rgba(255,255,255,0.15)';
+      ctx.fillRect(px - size / 2 + n * (pxs + 1), py + size / 2 + 2, pxs, pxs);
     }
   }
 }
@@ -266,11 +265,41 @@ function draw(time) {
     ctx.fillStyle = `rgba(255,180,80,${(1 - t) * 0.2})`;
     ctx.beginPath(); ctx.arc(ex.x, ex.y, 10 + t * 220, 0, Math.PI * 2); ctx.fill();
   }
+  // Éclairs d'impact des coups portés (voir updateCombat dans 04-units.js) : très brefs (0.25s),
+  // juste de quoi rendre les combats lisibles à l'écran sans surcharger le rendu.
+  for (const hs of hitSparks) {
+    const t = hs.t / 0.25;
+    ctx.strokeStyle = `rgba(255,80,70,${1 - t})`; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(hs.x, hs.y, 3 + t * 8, 0, Math.PI * 2); ctx.stroke();
+  }
+
+  // Fumée de recherche (labo actif) : petits amas de blocs carrés gris translucides (motif
+  // pixel-art fixe généré à la naissance de chaque particule, voir spawnSmokeParticle dans
+  // 03-simulation.js) qui montent et s'estompent au fil de leur durée de vie — donne un retour
+  // visuel continu pendant les 60s de recherche, cohérent avec le reste du rendu du jeu (pas de
+  // cercles lisses ailleurs à l'écran).
+  for (const sp of smokeParticles) {
+    const frac = sp.t / sp.life; // 0 (naissance) -> 1 (disparition)
+    const riseY = sp.t * -14; // monte lentement avec le temps
+    const driftX = sp.drift * sp.t;
+    const blockSize = Math.max(2, Math.round(TILE * (0.14 + frac * 0.12)));
+    ctx.fillStyle = `rgba(200,200,210,${(1 - frac) * 0.4})`;
+    for (const p of sp.px) {
+      const bx = Math.round(sp.x + driftX + p.ox);
+      const by = Math.round(sp.y + riseY + p.oy);
+      ctx.fillRect(bx, by, blockSize, blockSize);
+    }
+  }
 
   if (buildMode) {
     const wp = screenToWorld(lastMouseScreen.x, lastMouseScreen.y);
     const t = worldToTile(wp);
-    const w = buildMode === 'barracks' ? 3 : buildMode === 'pillar' ? 2 : 1, h = w;
+    // Taille de l'aperçu lue directement dans BUILD_TYPES (voir 06-training-build.js) plutôt
+    // que redupliquée ici en dur : sans ça, tout nouveau type de bâtiment (avant-poste, labo...)
+    // s'afficherait avec un aperçu 1x1 erroné tant qu'on n'aurait pas pensé à mettre à jour ce
+    // ternaire séparément de la config.
+    const spec = BUILD_TYPES[buildMode];
+    const w = spec ? spec.w : 1, h = spec ? spec.h : 1;
     ctx.fillStyle = 'rgba(79,209,197,0.35)';
     ctx.fillRect(t.x * TILE, t.y * TILE, w * TILE, h * TILE);
     ctx.strokeStyle = '#4fd1c5';

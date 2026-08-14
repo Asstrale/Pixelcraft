@@ -60,11 +60,17 @@
   #toast:empty{ display:none; }
 
   #commandcard{
-    position:absolute; bottom:12px; left:50%;
+    /* Centrage horizontal SANS transform: combiner `zoom` (qui redimensionne réellement la
+       boîte, avant transform) avec `transform:translateX(-50%)` sur le même élément fait
+       diverger la position visuelle réelle de la zone de hit-test des clics une fois le zoom
+       différent de 1 (cas de tous nos réglages d'échelle UI, 1.4/1.8/2.0...) — c'était la cause
+       du souci de clic peu fiable sur les boutons de la command card. `left:0; right:0;
+       margin:auto` centre sans transform, donc sans ce décalage. */
+    position:absolute; bottom:12px; left:0; right:0; margin:0 auto; width:fit-content;
     display:flex; gap:12px; align-items:flex-start;
     background:var(--panel-bg); border:1px solid var(--panel-border); border-radius:4px;
     padding:10px; max-width:min(760px, 92vw);
-    transform:translateX(-50%); zoom:var(--ui-scale);
+    zoom:var(--ui-scale);
   }
   #commandcard.hidden{ display:none; }
   #cc-info{ min-width:110px; padding-right:10px; border-right:1px solid var(--panel-border); font-size:12px; align-self:stretch; }
@@ -108,9 +114,21 @@
     padding:10px 14px; font-size:11px; line-height:1.7; color:var(--text-dim); max-width:270px;
     zoom:var(--ui-scale);
   }
+  /* Rétracté : ne garde que la petite languette (#help-toggle) visible, tout le reste du
+     panneau disparaît — se déclenche automatiquement après 30s (voir 08-hud-ui.js) ou au clic
+     manuel sur la flèche. */
+  #help.collapsed{ padding:4px; max-width:none; background:transparent; border-color:transparent; }
+  #help.collapsed #help-content{ display:none; }
   #help b{ color:var(--text); }
   #help .h-title{ color:var(--amber); font-size:11px; letter-spacing:1px; margin-bottom:4px; display:block; }
   #help .warn{ color:var(--gaz); }
+  #help-toggle{
+    position:absolute; top:-9px; right:-9px; width:20px; height:20px; border-radius:50%;
+    background:var(--panel-bg); border:1px solid var(--panel-border); color:var(--text-dim);
+    cursor:pointer; font-size:11px; line-height:1; display:flex; align-items:center; justify-content:center;
+    transition:transform .15s;
+  }
+  #help.collapsed #help-toggle{ position:static; transform:rotate(180deg); }
 
   #selbox{
     position:absolute; border:1px solid var(--cyan); background:rgba(79,209,197,0.12);
